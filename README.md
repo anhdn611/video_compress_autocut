@@ -1,0 +1,1 @@
+[![Build Desktop Executables](https://github.com/anhdn611/video_compress_autocut/actions/workflows/build-desktop.yml/badge.svg)](https://github.com/anhdn611/video_compress_autocut/actions/workflows/build-desktop.yml)
