@@ -1,4 +1,4 @@
-name: Build Desktop Applications (.exe & .dmg with Icon)
+name: Build Desktop Applications (macOS Only)
 
 on:
   push:
@@ -7,45 +7,47 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-windows:
-    name: Build Windows Executable (.exe)
-    runs-on: windows-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+  # ==========================================
+  # WINDOWS BUILD JOB (TEMPORARILY COMMENTED OUT)
+  # ==========================================
+  # build-windows:
+  #   name: Build Windows Executable (.exe)
+  #   runs-on: windows-latest
+  #   steps:
+  #     - name: Checkout code
+  #       uses: actions/checkout@v4
+  #
+  #     - name: Set up Python
+  #       uses: actions/setup-python@v5
+  #       with:
+  #         python-version: '3.10'
+  #
+  #     - name: Install dependencies
+  #       run: |
+  #         python -m pip install --upgrade pip
+  #         pip install pyinstaller
+  #         if (Test-Path requirements.txt) { pip install -r requirements.txt }
+  #
+  #     - name: Install FFmpeg
+  #       run: choco install ffmpeg
+  #
+  #     - name: Build Windows .exe with Icon
+  #       run: |
+  #         if (Test-Path favicon_io/favicon.ico) {
+  #           pyinstaller --onefile --noconsole --icon=favicon_io/favicon.ico --name=video_compress_autocut main.py
+  #         } else {
+  #           pyinstaller --onefile --noconsole --name=video_compress_autocut main.py
+  #         }
+  #
+  #     - name: Upload Windows Artifact
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: video_compress_autocut-windows
+  #         path: dist/video_compress_autocut.exe
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pyinstaller Pillow
-          if (Test-Path requirements.txt) { pip install -r requirements.txt }
-
-      - name: Install FFmpeg
-        run: choco install ffmpeg
-
-      - name: Generate icon.ico from favicon_io
-        run: |
-          python convert_icon.py
-
-      - name: Build Windows .exe with Icon
-        run: |
-          if (Test-Path icon.ico) {
-            pyinstaller --onefile --noconsole --icon=icon.ico --name=video_compress_autocut main.py
-          } else {
-            pyinstaller --onefile --noconsole --name=video_compress_autocut main.py
-          }
-
-      - name: Upload Windows Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: video_compress_autocut-windows
-          path: dist/video_compress_autocut.exe
-
+  # ==========================================
+  # MACOS BUILD JOB (ACTIVE)
+  # ==========================================
   build-macos:
     name: Build macOS Disk Image (.dmg)
     runs-on: macos-latest
@@ -61,39 +63,37 @@ jobs:
       - name: Install dependencies & create-dmg
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller Pillow
+          pip install pyinstaller
           brew install ffmpeg create-dmg
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: Generate icon.icns from favicon_io
-        run: |
-          python convert_icon.py
-
       - name: Build macOS .app Bundle with Icon
         run: |
-          if [ -f icon.icns ]; then
-            pyinstaller --windowed --noconfirm --icon=icon.icns --name="VideoCompressAutocut" main.py
+          ICON_PATH=""
+          if [ -f favicon_io/android-chrome-512x512.png ]; then
+            ICON_PATH="favicon_io/android-chrome-512x512.png"
+          elif [ -f favicon_io/favicon.ico ]; then
+            ICON_PATH="favicon_io/favicon.ico"
+          fi
+
+          if [ -n "$ICON_PATH" ]; then
+            pyinstaller --windowed --noconfirm --icon="$ICON_PATH" --name="VideoCompressAutocut" main.py
           else
             pyinstaller --windowed --noconfirm --name="VideoCompressAutocut" main.py
           fi
 
-      - name: Create .dmg Installer with Volume Icon
+      - name: Create .dmg Installer
         run: |
           mkdir -p dmg_out
           
-          DMG_ARGS=(
-            --volname "Video Compress Autocut"
-            --window-pos 200 120
-            --window-size 600 400
-            --icon-size 100
-            --app-drop-link 420 185
-          )
-          
-          if [ -f icon.icns ]; then
-            DMG_ARGS+=(--volicon "icon.icns")
-          fi
-
-          create-dmg "${DMG_ARGS[@]}" "dmg_out/VideoCompressAutocut.dmg" "dist/VideoCompressAutocut.app"
+          create-dmg \
+            --volname "Video Compress Autocut" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --app-drop-link 420 185 \
+            "dmg_out/VideoCompressAutocut.dmg" \
+            "dist/VideoCompressAutocut.app"
 
       - name: Upload macOS Artifact
         uses: actions/upload-artifact@v4
@@ -103,16 +103,10 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    needs: [build-windows, build-macos]
+    needs: [build-macos]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
-      - name: Download Windows Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: video_compress_autocut-windows
-          path: release_files/
-
       - name: Download macOS Artifact
         uses: actions/download-artifact@v4
         with:
@@ -123,7 +117,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            release_files/video_compress_autocut.exe
-            release_files/VideoCompressAutocut.dmg
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            release_files/
