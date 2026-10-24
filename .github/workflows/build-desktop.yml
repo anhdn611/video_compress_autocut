@@ -50,8 +50,7 @@ jobs:
 
       - name: Build Executable with PyInstaller
         run: |
-          # Đóng gói ứng dụng thành file đơn lẻ
-          pyinstaller --onefile --name=video_compress_autocut main.py
+          pyinstaller --onefile --name=video_compress_autocut src/server.py
         shell: bash
 
       - name: Upload Build Artifacts
