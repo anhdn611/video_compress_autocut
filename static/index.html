@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Video Compressor & Smart Trimmer Pro</title>
+  <meta name="description" content="Tự động cắt đoạn thừa, lọc khoảng im lặng và nén video siêu tốc chuẩn 20MB cho Zalo, Discord, Email trên Mac.">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <header>
+      <div class="badge-hw">
+        <span class="dot"></span>
+        <span>Apple Silicon VideoToolbox & Smart Trim AI Engine</span>
+      </div>
+      <h1>Video Studio <span>Pro</span></h1>
+      <p>Tự động cắt bỏ đoạn im lặng / đoạn thừa & nén video dưới 20MB siêu nét</p>
+    </header>
+
+    <!-- Main Workspace -->
+    <main class="glass-panel" id="mainWorkspace">
+      
+      <!-- Upload Dropzone -->
+      <section id="uploadSection">
+        <div class="dropzone" id="dropzone">
+          <input type="file" id="fileInput" accept="video/*,.mov,.mp4,.mkv,.avi,.webm" style="display: none;">
+          <div class="upload-icon-wrapper">
+            <svg viewBox="0 0 24 24">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+            </svg>
+          </div>
+          <h3>Kéo & thả video vào đây</h3>
+          <p>Hỗ trợ iPhone 4K/60fps, Cinematic, MOV, MP4, MKV dung lượng không giới hạn</p>
+          <button type="button" class="btn-browse" id="btnBrowse">
+            📁 Chọn file từ máy tính
+          </button>
+        </div>
+
+        <!-- Upload Progress -->
+        <div class="upload-progress-box" id="uploadProgressBox">
+          <div class="progress-header">
+            <span id="uploadStatusText">Đang tải video vào bộ xử lý...</span>
+            <span id="uploadPercent">0%</span>
+          </div>
+          <div class="progress-track">
+            <div class="progress-fill" id="uploadProgressFill"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Video Meta & Config Section (Hiển thị sau khi chọn video) -->
+      <section id="configSection" class="config-section">
+        <!-- Video Info Card -->
+        <div class="video-card" id="videoCard">
+          <div class="video-card-content">
+            <img id="videoThumb" class="video-thumb" src="" alt="Thumbnail Video">
+            <div class="video-meta">
+              <div class="video-title" id="videoFilename">IMG_3308.MOV</div>
+              <div class="meta-tags">
+                <span class="tag">📦 Gốc: <strong id="videoOrigSize">352 MB</strong></span>
+                <span class="tag">⏱️ Thời lượng: <strong id="videoDuration">4:10</strong></span>
+                <span class="tag">📐 Độ phân giải: <strong id="videoDimensions">1080x1350</strong></span>
+                <span class="tag" id="audioTag">🔊 Audio Stereo</span>
+              </div>
+            </div>
+            <button class="btn-remove" id="btnRemoveFile" title="Hủy chọn file">✕</button>
+          </div>
+        </div>
+
+        <!-- BỘ XỬ LÝ ĐA NĂNG (STUDIO PIPELINE) -->
+        <div class="studio-header-bar">
+          <div>
+            <h3 style="font-family: 'Outfit', sans-serif; font-size: 1.18rem; font-weight: 700; color: #fff;">
+              🎛️ Bộ Xử Lý Video Đa Năng (Studio Pipeline)
+            </h3>
+            <p style="font-size: 0.84rem; color: var(--text-muted); margin-top: 3px;">
+              Bật/tắt tự do bất kỳ tính năng nào bên dưới. Bạn có thể kết hợp cả 3 hoặc chọn riêng lẻ tùy ý!
+            </p>
+          </div>
+          <div class="pipeline-badge-count" id="activeFeaturesCountBadge">
+            2/3 tính năng đang bật
+          </div>
+        </div>
+
+        <!-- MODULE 1: CẮT & TỐI ƯU THỜI LƯỢNG -->
+        <div class="studio-card active" id="cardTrim">
+          <div class="studio-card-header">
+            <div class="card-header-left">
+              <div class="card-icon-box" style="background: rgba(16, 185, 129, 0.15); color: #34d399;">✂️</div>
+              <div>
+                <div class="card-title">Bước 1: Cắt & Tối Ưu Thời Lượng (Smart Trim)</div>
+                <div class="card-subtitle">Lọc bỏ khoảng im lặng ngập ngừng hoặc cắt đầu đuôi thừa</div>
+              </div>
+            </div>
+            <label class="switch" title="Bật/Tắt tính năng cắt">
+              <input type="checkbox" id="toggleTrim" checked>
+              <span class="switch-slider"></span>
+            </label>
+          </div>
+
+          <div class="studio-card-body" id="bodyTrim">
+            <!-- Kiểu cắt (Pills) -->
+            <div class="trim-mode-selector">
+              <button type="button" class="trim-mode-pill active" data-trim-mode="auto_silence">
+                🎙️ Lọc Khoảng Lặng (Jump-Cut)
+              </button>
+              <button type="button" class="trim-mode-pill" data-trim-mode="intro_outro">
+                ⏱️ Cắt Đầu & Đuôi Thừa
+              </button>
+              <button type="button" class="trim-mode-pill" data-trim-mode="manual">
+                ✂️ Cắt Mốc Thủ Công
+              </button>
+            </div>
+
+            <!-- Kiểu 1: Lọc khoảng lặng -->
+            <div class="trim-subview active" id="subviewSilence">
+              <div class="silence-box" style="border: none; padding: 0; background: none;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                  <div>
+                    <strong style="font-size: 0.95rem;">Quét & Loại Bỏ Khoảng Im Lặng (Dead Air)</strong>
+                    <p style="font-size: 0.82rem; color: var(--text-muted); margin-top: 2px;">
+                      Tự động cắt bỏ những lúc ngập ngừng suy nghĩ, giữ giọng nói liền mạch như TikTok/Reels
+                    </p>
+                  </div>
+                  <button type="button" class="btn-browse" id="btnRescanSilence" style="padding: 6px 14px; font-size: 0.82rem;">
+                    🔄 Quét lại
+                  </button>
+                </div>
+
+                <!-- Kết quả quét -->
+                <div class="silence-metrics" id="silenceMetrics" style="margin-top: 12px;">
+                  <div class="metric-card">
+                    <div class="metric-val" id="valSilenceCount">--</div>
+                    <div class="metric-label">Khoảng im lặng phát hiện</div>
+                  </div>
+                  <div class="metric-card highlight">
+                    <div class="metric-val" id="valSavedTime">--</div>
+                    <div class="metric-label">Thời gian cắt bỏ được</div>
+                  </div>
+                  <div class="metric-card">
+                    <div class="metric-val" id="valNewDuration">--</div>
+                    <div class="metric-label">Thời lượng sau khi cắt</div>
+                  </div>
+                </div>
+
+                <!-- Thanh Timeline Meter -->
+                <div class="timeline-meter" style="margin: 12px 0 6px;">
+                  <div class="timeline-speech-fill" id="timelineSpeechFill" style="width: 100%;"></div>
+                </div>
+                <div class="timeline-legend">
+                  <span>🟩 Đoạn có tiếng (Giữ lại)</span>
+                  <span>🟥 Đoạn im lặng (Cắt bỏ)</span>
+                </div>
+
+                <!-- Mức Độ Mượt Mà -->
+                <div style="margin-top: 14px; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 12px;">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <span style="font-size: 0.85rem; font-weight: 700; color: #a5b4fc;">🌿 Mức độ mượt mà (Khử giật sau khi cắt):</span>
+                    <span id="smoothProfileDesc" style="font-size: 0.8rem; font-weight: 600; color: var(--accent-emerald);">Tự nhiên & Không giật hình</span>
+                  </div>
+                  <div class="presets-grid" id="smoothPresetsGrid" style="grid-template-columns: repeat(3, 1fr); margin-bottom: 4px;">
+                    <div class="preset-chip active" data-profile="ultra_smooth">
+                      <span class="preset-name">🌿 Siêu Mượt (Khuyên Dùng)</span>
+                      <span class="preset-value" style="font-size: 0.92rem;">> 1.4s</span>
+                      <span style="font-size: 0.7rem; color: var(--text-dim);">Tự nhiên, không giật hình</span>
+                    </div>
+                    <div class="preset-chip" data-profile="natural">
+                      <span class="preset-name">⚖️ Cân Bằng</span>
+                      <span class="preset-value" style="font-size: 0.92rem;">> 1.1s</span>
+                      <span style="font-size: 0.7rem; color: var(--text-dim);">Lưu loát, sạch ngập ngừng</span>
+                    </div>
+                    <div class="preset-chip" data-profile="fast">
+                      <span class="preset-name">⚡ Dồn Dập</span>
+                      <span class="preset-value" style="font-size: 0.92rem;">> 0.8s</span>
+                      <span style="font-size: 0.7rem; color: var(--text-dim);">Jump-cut phong cách TikTok</span>
+                    </div>
+                  </div>
+                  <p style="font-size: 0.75rem; color: var(--text-dim); margin-top: 6px;">
+                    ✨ Tự động kích hoạt: <strong>Đệm đầu/cuối câu 300ms</strong> + <strong>Khử lách tách âm thanh</strong> + <strong>Khóa chuẩn 30fps</strong>.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Kiểu 2: Cắt đầu & đuôi thừa -->
+            <div class="trim-subview" id="subviewIntro">
+              <div class="silence-box" style="border: none; padding: 0; background: none;">
+                <strong style="font-size: 0.95rem;">Tự Động Bỏ Đoạn Chờ Lúc Bật & Tắt Camera</strong>
+                <p style="font-size: 0.82rem; color: var(--text-muted); margin-top: 3px;">
+                  Tự động nhận diện mốc bắt đầu nói đầu tiên và mốc kết thúc nói cuối cùng, cắt bỏ vài giây chuẩn bị.
+                </p>
+                <div class="silence-metrics" style="grid-template-columns: 1fr 1fr; margin-top: 12px;">
+                  <div class="metric-card">
+                    <div class="metric-val" id="valIntroTrim">0.0s</div>
+                    <div class="metric-label">Đoạn đầu được cắt</div>
+                  </div>
+                  <div class="metric-card">
+                    <div class="metric-val" id="valOutroTrim">0.0s</div>
+                    <div class="metric-label">Đoạn đuôi được cắt</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Kiểu 3: Cắt thủ công -->
+            <div class="trim-subview" id="subviewManual">
+              <div class="range-inputs" style="margin-bottom: 0;">
+                <div class="input-group">
+                  <label for="manualStartInput">Mốc Bắt Đầu (Giây hoặc mm:ss):</label>
+                  <input type="text" id="manualStartInput" value="0.0">
+                </div>
+                <div class="input-group">
+                  <label for="manualEndInput">Mốc Kết Thúc (Giây hoặc mm:ss):</label>
+                  <input type="text" id="manualEndInput" value="60.0">
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- MODULE 2: XÓA PHÔNG HẬU CẢNH AI (CINEMATIC BOKEH) -->
+        <div class="studio-card" id="cardBokeh">
+          <div class="studio-card-header">
+            <div class="card-header-left">
+              <div class="card-icon-box" style="background: rgba(14, 165, 233, 0.15); color: #38bdf8;">🎭</div>
+              <div>
+                <div class="card-title">Bước 2: Xóa Phông Hậu Cảnh AI (Cinematic Bokeh Portrait)</div>
+                <div class="card-subtitle">Nhận diện người bằng Apple Neural Engine và làm mờ phông nền phía sau</div>
+              </div>
+            </div>
+            <label class="switch" title="Bật/Tắt tính năng xóa phông">
+              <input type="checkbox" id="toggleBokeh">
+              <span class="switch-slider"></span>
+            </label>
+          </div>
+
+          <div class="studio-card-body" id="bodyBokeh">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+              <div>
+                <strong style="font-size: 0.95rem;">Làm Mờ Phông Nền Bằng Trí Tuệ Nhân Tạo (Offline 100%)</strong>
+                <p style="font-size: 0.82rem; color: var(--text-muted); margin-top: 2px;">
+                  Tự động tách chủ thể sắc nét và áp dụng hiệu ứng mờ trường ảnh như máy ảnh cơ
+                </p>
+              </div>
+              <button type="button" class="btn-browse" id="btnPreviewBokeh" style="padding: 6px 14px; font-size: 0.82rem;">
+                👁️ Xem trước 1 frame
+              </button>
+            </div>
+
+            <!-- Khung xem trước Bokeh Preview -->
+            <div id="bokehPreviewBox" style="display: none; text-align: center; margin: 12px 0; background: rgba(0,0,0,0.4); border-radius: 12px; padding: 12px; border: 1px solid rgba(255,255,255,0.08);">
+              <p style="font-size: 0.8rem; color: var(--accent-cyan); margin-bottom: 8px;">✨ Ảnh mẫu sau khi xóa phông AI:</p>
+              <img id="bokehPreviewImg" src="" alt="Bokeh Preview" style="max-height: 260px; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.5);">
+            </div>
+
+            <!-- Chọn mức độ mờ -->
+            <div style="margin-top: 10px;">
+              <span style="font-size: 0.85rem; font-weight: 700; color: #a5b4fc; display: block; margin-bottom: 8px;">
+                Mức độ xóa phông (Độ sâu trường ảnh):
+              </span>
+              <div class="presets-grid" id="bokehPresetsGrid" style="grid-template-columns: repeat(3, 1fr); margin-bottom: 12px;">
+                <div class="preset-chip" data-blur="15">
+                  <span class="preset-name">🌸 Nhẹ Nhàng (f/2.8)</span>
+                  <span class="preset-value" style="font-size: 0.92rem;">15px</span>
+                  <span style="font-size: 0.7rem; color: var(--text-dim);">Dịu mắt, tự nhiên</span>
+                </div>
+                <div class="preset-chip active" data-blur="25">
+                  <span class="preset-name">📷 Chuẩn Chân Dung (f/1.8)</span>
+                  <span class="preset-value" style="font-size: 0.92rem;">25px</span>
+                  <span style="font-size: 0.7rem; color: var(--text-dim);">Ống kính 50mm chân dung</span>
+                </div>
+                <div class="preset-chip" data-blur="42">
+                  <span class="preset-name">🌟 Xóa Phông Sâu (f/1.2)</span>
+                  <span class="preset-value" style="font-size: 0.92rem;">42px</span>
+                  <span style="font-size: 0.7rem; color: var(--text-dim);">Mờ tịt toàn bộ hậu cảnh</span>
+                </div>
+              </div>
+
+              <!-- Thanh trượt bán kính mờ -->
+              <div class="slider-group" style="margin-bottom: 0;">
+                <div class="slider-header">
+                  <span style="font-size: 0.82rem; color: var(--text-muted);">Bán kính làm mờ tùy chỉnh:</span>
+                  <span id="bokehRadiusText" style="font-weight: 700; color: #38bdf8;">25 px</span>
+                </div>
+                <input type="range" id="bokehSlider" min="8" max="60" step="2" value="25">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- MODULE 3: NÉN DUNG LƯỢNG MỤC TIÊU -->
+        <div class="studio-card active" id="cardCompress">
+          <div class="studio-card-header">
+            <div class="card-header-left">
+              <div class="card-icon-box" style="background: rgba(99, 102, 241, 0.15); color: #818cf8;">⚡</div>
+              <div>
+                <div class="card-title">Bước 3: Nén Dung Lượng Mục Tiêu (Apple Silicon VideoToolbox)</div>
+                <div class="card-subtitle">Tối ưu dung lượng để gửi qua Zalo (&lt; 20MB), Discord, Email</div>
+              </div>
+            </div>
+            <label class="switch" title="Bật/Tắt tính năng nén">
+              <input type="checkbox" id="toggleCompress" checked>
+              <span class="switch-slider"></span>
+            </label>
+          </div>
+
+          <div class="studio-card-body" id="bodyCompress">
+            <div class="section-title" style="margin-bottom: 12px;">
+              <span style="font-size: 0.92rem;">Mục tiêu dung lượng sau nén:</span>
+              <span class="target-badge" id="targetBadge">18.0 MB</span>
+            </div>
+
+            <div class="presets-grid" id="presetsGrid">
+              <div class="preset-chip active" data-mb="18">
+                <span class="preset-name">🟢 Zalo / Chuẩn</span>
+                <span class="preset-value">18 MB</span>
+              </div>
+              <div class="preset-chip" data-mb="24">
+                <span class="preset-name">🟣 Discord Free</span>
+                <span class="preset-value">24 MB</span>
+              </div>
+              <div class="preset-chip" data-mb="20">
+                <span class="preset-name">🔵 Telegram</span>
+                <span class="preset-value">20 MB</span>
+              </div>
+              <div class="preset-chip" data-mb="10">
+                <span class="preset-name">🟡 Siêu nhẹ</span>
+                <span class="preset-value">10 MB</span>
+              </div>
+            </div>
+
+            <div class="slider-group" style="margin-bottom: 0;">
+              <div class="slider-header">
+                <span style="font-size: 0.82rem; color: var(--text-muted);">Thanh trượt tuỳ chỉnh:</span>
+                <span id="sliderValueText" style="font-weight: 700; color: #38bdf8;">18 MB</span>
+              </div>
+              <input type="range" id="sizeSlider" min="5" max="50" step="1" value="18">
+            </div>
+          </div>
+        </div>
+
+        <!-- THANH QUY TRÌNH TỰ ĐỘNG (PIPELINE FLOW) -->
+        <div class="pipeline-flow-container">
+          <div class="pipeline-flow-header">
+            <span style="font-size: 0.82rem; font-weight: 700; color: #a5b4fc; text-transform: uppercase; letter-spacing: 0.5px;">
+              🔗 Quy trình xử lý đã chọn:
+            </span>
+          </div>
+          <div class="pipeline-flow-steps" id="pipelineFlowSteps">
+            <!-- Tự động cập nhật bởi JavaScript -->
+          </div>
+        </div>
+
+        <!-- Nút Thực Thi Lớn -->
+        <button type="button" class="btn-primary" id="btnStartProcess">
+          <span id="btnProcessLabel">🚀 Bắt Đầu Xử Lý Video</span>
+        </button>
+      </section>
+      </section>
+
+      <!-- Live Progress Panel -->
+      <section id="compressProgressPanel" class="compress-progress-panel">
+        <div class="status-stage" id="compressStageText">Đang chuẩn bị...</div>
+        
+        <div class="progress-track" style="height: 12px; margin: 16px 0;">
+          <div class="progress-fill" id="compressProgressFill"></div>
+        </div>
+
+        <div class="status-details">
+          <span>Tiến trình: <strong id="compressPercentText">0%</strong></span>
+          <span>Tốc độ: <span class="speed-tag" id="compressSpeedText">24x</span></span>
+          <span>Ước tính: <strong id="compressEtaText">Vài giây</strong></span>
+        </div>
+      </section>
+
+      <!-- Result Panel -->
+      <section id="resultPanel" class="result-panel">
+        <div style="text-align: center;">
+          <div class="success-badge">
+            <span>✨ Xử lý thành công xuất sắc!</span>
+          </div>
+        </div>
+
+        <div class="comparison-grid">
+          <div class="comparison-card">
+            <div class="comparison-label">Video ban đầu</div>
+            <div class="comparison-val" id="resOrigMetrics">352 MB</div>
+          </div>
+          <div class="comparison-card highlight">
+            <div class="comparison-label">
+              Kết quả sau khi xử lý
+              <span class="savings-chip" id="resSavingsChip">-94.9%</span>
+            </div>
+            <div class="comparison-val" id="resCompMetrics">17.9 MB</div>
+          </div>
+        </div>
+
+        <!-- Preview Video Player -->
+        <div class="preview-player-box">
+          <video id="previewPlayer" controls></video>
+        </div>
+
+        <!-- Actions -->
+        <div class="action-grid">
+          <a id="btnDownload" class="btn-secondary" href="#" download>
+            ⬇️ Tải Video Về Máy
+          </a>
+          <button id="btnSaveDownloads" class="btn-secondary btn-save-downloads">
+            📂 Lưu vào Downloads & Mở Finder
+          </button>
+        </div>
+
+        <button type="button" class="btn-new-task" id="btnNewTask">
+          + Xử lý một video khác
+        </button>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- Toast Notification -->
+  <div class="toast" id="toast">
+    <span id="toastIcon">✅</span>
+    <span id="toastMsg">Thao tác thành công!</span>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
