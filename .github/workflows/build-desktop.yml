@@ -77,9 +77,9 @@ jobs:
           fi
 
           if [ -n "$ICON_PATH" ]; then
-            pyinstaller --windowed --noconfirm --icon="$ICON_PATH" --name="VideoCompressAutocut" main.py
+            pyinstaller --windowed --noconfirm --icon="$ICON_PATH" --name="VideoCompressAutocut" app.py
           else
-            pyinstaller --windowed --noconfirm --name="VideoCompressAutocut" main.py
+            pyinstaller --windowed --noconfirm --name="VideoCompressAutocut" app.py
           fi
 
       - name: Create .dmg Installer
