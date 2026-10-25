@@ -10,7 +10,8 @@ import shutil
 import urllib.parse
 import subprocess
 import threading
-import webbrowser
+import webview
+
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -815,11 +816,31 @@ def start_server(port=8765):
     return server, url
 
 if __name__ == "__main__":
+    import webview
+    
     port = 8765
     server, url = start_server(port)
-    threading.Timer(0.8, lambda: webbrowser.open(url)).start()
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\nĐã dừng server.")
-        server.server_close()
+
+    # Đẩy HTTP server sang một luồng riêng biệt để không block giao diện cửa sổ
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+
+    print(f"🖥️ Mở giao diện Desktop App tại: {url}")
+
+    # Tạo và hiển thị cửa sổ Desktop độc lập
+    webview.create_window(
+        title="Video Studio Pro",
+        url=url,
+        width=1000,
+        height=800,
+        min_size=(800, 600),
+        background_color='#090d16' # Đồng bộ với --bg-main trong style.css để tránh chớp trắng khi load
+    )
+    
+    # Bắt đầu vòng lặp sự kiện của giao diện native (chặn luồng chính tại đây)
+    webview.start()
+
+    # Khi người dùng bấm X để đóng cửa sổ, tiến hành dọn dẹp process
+    print("\nĐã đóng giao diện, đang dừng hệ thống...")
+    server.shutdown()
+    server.server_close()

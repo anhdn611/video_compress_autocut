@@ -26,9 +26,8 @@ jobs:
       - name: Install dependencies & create-dmg
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller Pillow
+          pip install pyinstaller Pillow webview
           brew install ffmpeg create-dmg
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
       - name: Build macOS .app Bundle with Icon
         run: |
