@@ -7,7 +7,6 @@ on:
   workflow_dispatch:
 
 jobs:
-
   # ==========================================
   # MACOS BUILD JOB (ACTIVE)
   # ==========================================
@@ -26,7 +25,8 @@ jobs:
       - name: Install dependencies & create-dmg
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller Pillow webview
+          # Cập nhật webview -> pywebview
+          pip install pyinstaller Pillow pywebview
           brew install ffmpeg create-dmg
 
       - name: Build macOS .app Bundle with Icon
@@ -38,16 +38,17 @@ jobs:
             ICON_PATH="favicon_io/favicon.ico"
           fi
 
+          # Thêm tham số --add-data để gói giao diện (static) và engine AI (cinematic_blur) vào trong app
           if [ -n "$ICON_PATH" ]; then
-            pyinstaller --windowed --noconfirm --icon="$ICON_PATH" --name="VideoCompressAutocut" app.py
+            pyinstaller --windowed --noconfirm --add-data "static:static" --add-data "cinematic_blur:." --icon="$ICON_PATH" --name="VideoCompressAutocut" app.py
           else
-            pyinstaller --windowed --noconfirm --name="VideoCompressAutocut" app.py
+            pyinstaller --windowed --noconfirm --add-data "static:static" --add-data "cinematic_blur:." --name="VideoCompressAutocut" app.py
           fi
 
       - name: Create .dmg Installer
         run: |
           mkdir -p dmg_out
-          
+
           create-dmg \
             --volname "Video Compress Autocut" \
             --window-pos 200 120 \
