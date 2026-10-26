@@ -648,44 +648,55 @@ class VideoCompressorHandler(BaseHTTPRequestHandler):
 
         # Upload video directly
         if path == "/api/upload":
-            content_length = int(self.headers.get("Content-Length", 0))
-            raw_filename = self.headers.get("X-File-Name", "uploaded_video.mp4")
-            filename = urllib.parse.unquote(raw_filename)
+            try:
+                content_length = int(self.headers.get("Content-Length", 0))
+                raw_filename = self.headers.get("X-File-Name", "uploaded_video.mp4")
+                filename = urllib.parse.unquote(raw_filename)
 
-            task_id = str(uuid.uuid4())[:8]
-            ext = os.path.splitext(filename)[1] or ".mp4"
-            saved_path = os.path.join(TEMP_DIR, f"{task_id}_input{ext}")
+                task_id = str(uuid.uuid4())[:8]
+                ext = os.path.splitext(filename)[1] or ".mp4"
+                saved_path = os.path.join(TEMP_DIR, f"{task_id}_input{ext}")
 
-            bytes_read = 0
-            chunk_size = 1024 * 1024
-            with open(saved_path, "wb") as f:
-                while bytes_read < content_length:
-                    to_read = min(chunk_size, content_length - bytes_read)
-                    chunk = self.rfile.read(to_read)
-                    if not chunk: break
-                    f.write(chunk)
-                    bytes_read += len(chunk)
+                # 1. Ghi file an toàn
+                bytes_read = 0
+                chunk_size = 1024 * 1024
+                with open(saved_path, "wb") as f:
+                    while bytes_read < content_length:
+                        to_read = min(chunk_size, content_length - bytes_read)
+                        chunk = self.rfile.read(to_read)
+                        if not chunk: break
+                        f.write(chunk)
+                        bytes_read += len(chunk)
 
-            info = get_video_info(saved_path)
-            thumb_path = os.path.join(TEMP_DIR, f"{task_id}_thumb.jpg")
-            generate_thumbnail(saved_path, thumb_path, info["duration"])
+                # 2. Lấy thông tin và tạo thumbnail (có bắt lỗi nếu thiếu FFmpeg)
+                try:
+                    info = get_video_info(saved_path)
+                    thumb_path = os.path.join(TEMP_DIR, f"{task_id}_thumb.jpg")
+                    generate_thumbnail(saved_path, thumb_path, info["duration"])
+                except FileNotFoundError:
+                    raise Exception("Không tìm thấy FFmpeg/FFprobe trên máy. Vui lòng chạy lệnh 'brew install ffmpeg' trên Terminal.")
+                except Exception as e:
+                    raise Exception(f"Lỗi xử lý video: {str(e)}")
 
-            with TASKS_LOCK:
-                TASKS[task_id] = {
+                with TASKS_LOCK:
+                    TASKS[task_id] = {
+                        "id": task_id,
+                        "filename": filename,
+                        "input_path": saved_path,
+                        "info": info,
+                        "status": "ready",
+                        "created_at": time.time()
+                    }
+
+                self.send_json({
                     "id": task_id,
                     "filename": filename,
-                    "input_path": saved_path,
                     "info": info,
-                    "status": "ready",
-                    "created_at": time.time()
-                }
-
-            self.send_json({
-                "id": task_id,
-                "filename": filename,
-                "info": info,
-                "thumbnail_url": f"/api/thumbnail?id={task_id}"
-            })
+                    "thumbnail_url": f"/api/thumbnail?id={task_id}"
+                })
+            except Exception as e:
+                print(f"Upload error: {str(e)}")
+                self.send_json({"error": str(e)}, 500)
             return
 
         # Tạo ảnh xem trước xóa phông (Bokeh)

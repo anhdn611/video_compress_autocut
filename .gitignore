@@ -4,3 +4,4 @@ temp/
 *.mov
 *.MOV
 *.gif
+.DS_Store
