@@ -11,12 +11,20 @@ import urllib.parse
 import subprocess
 import threading
 import webview
+import tempfile
+
 
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
+# 1. Ép hệ thống nhận diện thư mục cài đặt mặc định của Homebrew chứa FFmpeg
+os.environ["PATH"] += os.pathsep + "/opt/homebrew/bin:/usr/local/bin"
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
-TEMP_DIR = os.path.join(BASE_DIR, "temp")
+
+# 2. Trỏ thư mục TEMP ra ngoài gói .app để tránh lỗi Permission Denied của macOS
+TEMP_DIR = os.path.join(tempfile.gettempdir(), "VideoStudioPro_Temp")
+
 os.makedirs(STATIC_DIR, exist_ok=True)
 os.makedirs(TEMP_DIR, exist_ok=True)
 
