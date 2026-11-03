@@ -83,12 +83,12 @@
 
 ### Cách 1: Tải Bản Cài Đặt Sẵn (.dmg) (Khuyên Dùng)
 
-1. Truy cập mục **[Releases](https://github.com/anhdn611/video_compress_autocut/releases)** hoặc tải artifact mới nhất từ **GitHub Actions**.
+1. Truy cập mục **[Releases](https://github.com/anhdn611/video_compress_autocut/releases)**. Bản phát hành được ký số và Apple notarize để có thể mở bình thường sau khi tải về.
 2. Mở file `VideoCompressAutocut.dmg`.
 3. Kéo biểu tượng **VideoCompressAutocut** vào thư mục **Applications**.
 4. Khởi chạy ứng dụng từ Launchpad hoặc Applications.
 
-> **Lưu ý**: Nếu macOS hiển thị cảnh báo ứng dụng chưa được chứng thực bởi Apple (Gatekeeper), bạn hãy vào **System Settings (Cài đặt hệ thống)** ➔ **Privacy & Security (Quyền riêng tư & Bảo mật)** ➔ cuộn xuống và nhấn **Open Anyway (Vẫn mở)**.
+> Artifact của một lần chạy thủ công trên GitHub Actions là bản kiểm thử ad-hoc, không phải bản phát hành đã notarize. macOS có thể yêu cầu **Open Anyway** đối với artifact này; hãy dùng **Releases** để cài bản chính thức.
 
 ---
 
@@ -126,7 +126,7 @@
 
 ## 📦 Hướng Dẫn Đóng Gói Ứng Dụng Desktop (.app & .dmg)
 
-Dự án cung cấp sẵn quy trình tự động đóng gói ứng dụng macOS độc lập:
+Dự án cung cấp sẵn quy trình tự động đóng gói ứng dụng macOS độc lập. Workflow GitHub Actions biên dịch lại `cinematic_blur` trên runner Apple Silicon, vì vậy không dùng binary sai kiến trúc từ máy phát triển.
 
 1. **Tạo bộ icon ứng dụng (.ico & .icns)**:
    ```bash
@@ -162,6 +162,22 @@ Dự án cung cấp sẵn quy trình tự động đóng gói ứng dụng macOS
    ```
    File cài đặt hoàn chỉnh sẽ nằm tại: `dmg_out/VideoCompressAutocut.dmg`.
 
+### Ký số và notarize khi phát hành qua GitHub Actions
+
+Để file DMG tải từ GitHub mở được mà không bị Gatekeeper chặn, hãy thêm các **Actions secrets** sau trước khi tạo tag `v*`:
+
+| Secret | Nội dung |
+| :--- | :--- |
+| `MACOS_CODESIGN_IDENTITY` | Developer ID Application identity, ví dụ `Developer ID Application: Your Name (TEAMID)` |
+| `MACOS_CERTIFICATE_BASE64` | File `.p12` Developer ID Application mã hóa Base64 |
+| `MACOS_CERTIFICATE_PASSWORD` | Mật khẩu của file `.p12` |
+| `MACOS_KEYCHAIN_PASSWORD` | Mật khẩu tạm bất kỳ cho keychain của runner |
+| `APPLE_ID` | Apple ID dùng cho notarization |
+| `APPLE_TEAM_ID` | Apple Developer Team ID |
+| `APPLE_APP_SPECIFIC_PASSWORD` | App-specific password của Apple ID |
+
+Push tag khi thiếu một secret sẽ dừng trước bước phát hành thay vì đăng một DMG không thể chạy. `workflow_dispatch` vẫn tạo artifact ad-hoc để kiểm thử nội bộ.
+
 ---
 
 ## 📁 Cấu Trúc Dự Án
@@ -190,7 +206,7 @@ video_compress_autocut/
 | Sự cố | Nguyên nhân | Cách khắc phục |
 | :--- | :--- | :--- |
 | **Không tìm thấy FFmpeg** | Máy chưa cài đặt công cụ dòng lệnh `ffmpeg` | Chạy lệnh `brew install ffmpeg` trên Terminal. Ứng dụng đã tự động thêm `/opt/homebrew/bin` và `/usr/local/bin` vào đường dẫn hệ thống. |
-| **Cảnh báo bảo mật khi mở app trên macOS** | macOS Gatekeeper chặn ứng dụng tải từ bên ngoài chưa ký số | Vào **Cài đặt hệ thống (System Settings)** ➔ **Quyền riêng tư & Bảo mật (Privacy & Security)** ➔ Nhấn **Open Anyway (Vẫn mở)**. |
+| **Cảnh báo bảo mật khi mở app trên macOS** | Bạn cài artifact kiểm thử chưa notarize | Dùng file trong **Releases**. Nếu cần thử artifact, vào **Cài đặt hệ thống (System Settings)** ➔ **Quyền riêng tư & Bảo mật (Privacy & Security)** ➔ **Open Anyway**. |
 | **Cổng 8765 đã được sử dụng** | Có tiến trình trước đó chưa giải phóng cổng | Ứng dụng tích hợp cơ chế tự động dọn tiến trình cũ hoặc tự động chuyển sang cổng kế tiếp `8766`. |
 | **Xóa phông AI không chạy** | Thiếu file binary `cinematic_blur` | Chạy lệnh `swiftc -O -framework AVFoundation -framework CoreImage -framework Vision cinematic_blur.swift -o cinematic_blur`. |
 
