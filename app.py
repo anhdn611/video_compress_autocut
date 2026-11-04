@@ -8,6 +8,7 @@ import uuid
 import time
 import shutil
 import urllib.parse
+import urllib.request
 import subprocess
 import threading
 import webview
@@ -15,6 +16,8 @@ import tempfile
 
 
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+
+from build_version import __version__
 
 # 1. Ép hệ thống nhận diện thư mục cài đặt mặc định của Homebrew chứa FFmpeg
 os.environ["PATH"] += os.pathsep + "/opt/homebrew/bin:/usr/local/bin"
@@ -29,10 +32,105 @@ os.makedirs(STATIC_DIR, exist_ok=True)
 os.makedirs(TEMP_DIR, exist_ok=True)
 
 DOWNLOADS_DIR = os.path.expanduser("~/Downloads")
+APP_NAME = "VideoCompressAutocut"
+GITHUB_RELEASE_API = "https://api.github.com/repos/anhdn611/video_compress_autocut/releases/latest"
 
 # Quản lý trạng thái các tác vụ
 TASKS = {}
 TASKS_LOCK = threading.Lock()
+
+
+def version_key(version):
+    """Convert a v-prefixed semantic version into a comparable tuple."""
+    base_version = version.lstrip("v").split("-", 1)[0]
+    parts = []
+    for part in base_version.split("."):
+        match = re.match(r"\\d+", part)
+        parts.append(int(match.group()) if match else 0)
+    return tuple((parts + [0, 0, 0])[:3])
+
+
+def latest_release():
+    """Return the latest release version and its DMG URL, or None on failure."""
+    request = urllib.request.Request(
+        GITHUB_RELEASE_API,
+        headers={"Accept": "application/vnd.github+json", "User-Agent": APP_NAME},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            release = json.load(response)
+    except Exception:
+        return None
+
+    version = release.get("tag_name", "")
+    for asset in release.get("assets", []):
+        if asset.get("name") == f"{APP_NAME}.dmg":
+            return version, asset.get("browser_download_url")
+    return None
+
+
+def download_update(dmg_url, version):
+    """Download a release DMG atomically into Downloads, then return its path."""
+    destination = os.path.join(DOWNLOADS_DIR, f"{APP_NAME}-{version.lstrip('v')}.dmg")
+    temporary_destination = f"{destination}.part"
+    request = urllib.request.Request(dmg_url, headers={"User-Agent": APP_NAME})
+    with urllib.request.urlopen(request, timeout=30) as response, open(temporary_destination, "wb") as output:
+        shutil.copyfileobj(response, output)
+    os.replace(temporary_destination, destination)
+    return destination
+
+
+def check_for_updates():
+    """Prompt for a newer signed GitHub Release after the app window is ready."""
+    # Builds run from source and manually dispatched test artifacts use this
+    # version, so they never prompt users to replace them with a release.
+    if "dev" in __version__:
+        return
+
+    release = latest_release()
+    if not release:
+        return
+    latest_version, dmg_url = release
+    if not dmg_url or version_key(latest_version) <= version_key(__version__):
+        return
+
+    window = webview.windows[0]
+    should_download = window.create_confirmation_dialog(
+        "Update available",
+        f"Version {latest_version.lstrip('v')} is available. Download and install it now?",
+    )
+    if not should_download:
+        return
+
+    try:
+        dmg_path = download_update(dmg_url, latest_version)
+        subprocess.Popen(["open", dmg_path])
+        window.create_confirmation_dialog(
+            "Installer opened",
+            "The new installer is open. Drag the app to Applications, then reopen it to finish updating.",
+        )
+    except Exception as error:
+        window.create_confirmation_dialog(
+            "Update download failed",
+            f"Could not download version {latest_version.lstrip('v')}: {error}",
+        )
+
+
+class AppWindowApi:
+    """Small native bridge used to fit the window to the current workflow."""
+
+    STAGE_SIZES = {
+        "upload": (860, 560),
+        "configure": (1080, 780),
+        "export": (920, 700),
+    }
+
+    def resize_for_stage(self, stage):
+        size = self.STAGE_SIZES.get(stage)
+        if not size or not webview.windows:
+            return False
+        webview.windows[0].resize(*size)
+        return True
 
 def get_video_info(file_path):
     """Trích xuất thông số video bằng ffprobe"""
@@ -811,25 +909,18 @@ class VideoCompressorHandler(BaseHTTPRequestHandler):
 
 def start_server(port=8765):
     ThreadingHTTPServer.allow_reuse_address = True
-    try:
-        server = ThreadingHTTPServer(("127.0.0.1", port), VideoCompressorHandler)
-    except OSError as e:
-        if e.errno == 48: # Address already in use
-            # Tự động dọn dẹp tiến trình cũ chiếm cổng
-            try:
-                res = subprocess.run(["lsof", "-ti", f":{port}"], stdout=subprocess.PIPE, text=True)
-                pids = res.stdout.strip().split()
-                for p in pids:
-                    if int(p) != os.getpid():
-                        subprocess.run(["kill", "-9", p])
-                time.sleep(0.5)
-                server = ThreadingHTTPServer(("127.0.0.1", port), VideoCompressorHandler)
-            except Exception:
-                # Nếu không thể dọn, thử cổng kế tiếp 8766
-                port += 1
-                server = ThreadingHTTPServer(("127.0.0.1", port), VideoCompressorHandler)
-        else:
-            raise e
+    # Never terminate another process merely because it happens to use the
+    # default port. This also makes side-by-side preview builds safe to run.
+    for candidate_port in range(port, port + 20):
+        try:
+            server = ThreadingHTTPServer(("127.0.0.1", candidate_port), VideoCompressorHandler)
+            port = candidate_port
+            break
+        except OSError as error:
+            if error.errno != 48:  # Address already in use
+                raise
+    else:
+        raise OSError(f"Không thể mở cổng từ {port} đến {port + 19}.")
     url = f"http://127.0.0.1:{port}"
     print(f"🚀 Video Studio Pro đang chạy tại: {url}")
     return server, url
@@ -850,14 +941,15 @@ if __name__ == "__main__":
     webview.create_window(
         title="Video Studio Pro",
         url=url,
-        width=1000,
-        height=800,
-        min_size=(800, 600),
+        width=860,
+        height=560,
+        min_size=(720, 520),
+        js_api=AppWindowApi(),
         background_color='#090d16' # Đồng bộ với --bg-main trong style.css để tránh chớp trắng khi load
     )
     
     # Bắt đầu vòng lặp sự kiện của giao diện native (chặn luồng chính tại đây)
-    webview.start()
+    webview.start(check_for_updates)
 
     # Khi người dùng bấm X để đóng cửa sổ, tiến hành dọn dẹp process
     print("\nĐã đóng giao diện, đang dừng hệ thống...")

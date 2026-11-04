@@ -128,10 +128,7 @@
 
 Dự án cung cấp sẵn quy trình tự động đóng gói ứng dụng macOS độc lập. Workflow GitHub Actions biên dịch lại `cinematic_blur` trên runner Apple Silicon, vì vậy không dùng binary sai kiến trúc từ máy phát triển.
 
-1. **Tạo bộ icon ứng dụng (.ico & .icns)**:
-   ```bash
-   python3 convert_icon.py
-   ```
+1. **Dùng bộ icon Play Cut đã có sẵn** trong `static/icons/`: PNG, ICNS cho macOS và ICO. Các file này cần được commit cùng code; build local và GitHub Actions sử dụng trực tiếp, không tạo lại icon mỗi lần build. `convert_icon.py` chỉ chạy thủ công khi đổi thiết kế icon.
 
 2. **Cài đặt công cụ tạo DMG**:
    ```bash
@@ -143,7 +140,8 @@ Dự án cung cấp sẵn quy trình tự động đóng gói ứng dụng macOS
    pyinstaller --windowed --noconfirm \
      --add-data "static:static" \
      --add-data "cinematic_blur:." \
-     --icon="favicon_io/android-chrome-512x512.png" \
+     --icon="static/icons/play-cut.icns" \
+     --osx-bundle-identifier="com.anhdn611.video-compress-autocut" \
      --name="VideoCompressAutocut" \
      app.py
    ```
@@ -178,6 +176,8 @@ Dự án cung cấp sẵn quy trình tự động đóng gói ứng dụng macOS
 
 Push tag khi thiếu một secret sẽ dừng trước bước phát hành thay vì đăng một DMG không thể chạy. `workflow_dispatch` vẫn tạo artifact ad-hoc để kiểm thử nội bộ.
 
+Mỗi bản cài đặt phát hành sẽ tự kiểm tra GitHub Releases khi mở ứng dụng. Khi có tag mới hơn, ứng dụng hỏi trước khi tải DMG đã notarize và tự mở installer; người dùng chỉ cần kéo ứng dụng mới vào **Applications**.
+
 ---
 
 ## 📁 Cấu Trúc Dự Án
@@ -187,7 +187,7 @@ video_compress_autocut/
 ├── app.py                      # Backend server (HTTP API), bộ điều phối FFmpeg & cửa sổ pywebview
 ├── cinematic_blur.swift        # Mã nguồn Swift tích hợp Apple Vision AI tách người & làm mờ Bokeh
 ├── cinematic_blur              # Binary thực thi của cinematic_blur đã được biên dịch tối ưu (-O)
-├── convert_icon.py             # Script tự động tạo icon.ico và icon.icns từ favicon PNG
+├── convert_icon.py             # Công cụ xuất lại ICNS/ICO thủ công khi đổi icon
 ├── requirements.txt            # Danh sách thư viện Python phụ thuộc
 ├── favicon_io/                 # Bộ tài nguyên hình ảnh logo và favicon
 ├── static/                     # Giao diện người dùng Webview

@@ -3,7 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Video Compressor & Smart Trimmer Pro</title>
+  <title>Video Studio Pro</title>
+  <meta name="application-name" content="Video Studio Pro">
+  <link rel="icon" type="image/png" href="/static/icons/play-cut.png">
+  <link rel="apple-touch-icon" href="/static/icons/play-cut.png">
   <meta name="description" content="Tự động cắt đoạn thừa, lọc khoảng im lặng và nén video siêu tốc chuẩn 20MB cho Zalo, Discord, Email trên Mac.">
   <link rel="stylesheet" href="/static/style.css">
 </head>
@@ -11,13 +14,17 @@
   <div class="container">
     <!-- Header -->
     <header>
-      <div class="badge-hw">
-        <span class="dot"></span>
-        <span>Apple Silicon VideoToolbox & Smart Trim AI Engine</span>
-      </div>
-      <h1>Video Studio <span>Pro</span></h1>
-      <p>Tự động cắt bỏ đoạn im lặng / đoạn thừa & nén video dưới 20MB siêu nét</p>
+      <h1>Video Studio</h1>
+      <p>Chọn video, điều chỉnh nhanh, rồi xuất file.</p>
     </header>
+
+    <nav class="workflow-steps" aria-label="Tiến trình xử lý video">
+      <span class="workflow-step active" data-workflow-step="upload"><i>1</i> Chọn video</span>
+      <span class="workflow-line" aria-hidden="true"></span>
+      <span class="workflow-step" data-workflow-step="configure"><i>2</i> Tuỳ chỉnh</span>
+      <span class="workflow-line" aria-hidden="true"></span>
+      <span class="workflow-step" data-workflow-step="export"><i>3</i> Xuất file</span>
+    </nav>
 
     <!-- Main Workspace -->
     <main class="glass-panel" id="mainWorkspace">
@@ -31,7 +38,7 @@
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
             </svg>
           </div>
-          <h3>Kéo & thả video vào đây</h3>
+          <h3>Kéo &amp; thả video vào đây</h3>
           <p>Hỗ trợ iPhone 4K/60fps, Cinematic, MOV, MP4, MKV dung lượng không giới hạn</p>
           <button type="button" class="btn-browse" id="btnBrowse">
             📁 Chọn file từ máy tính
@@ -65,19 +72,17 @@
                 <span class="tag" id="audioTag">🔊 Audio Stereo</span>
               </div>
             </div>
-            <button class="btn-remove" id="btnRemoveFile" title="Hủy chọn file">✕</button>
+            <button class="btn-change-video" id="btnRemoveFile" type="button" title="Chọn video khác">
+              ‹ Chọn video khác
+            </button>
           </div>
         </div>
 
         <!-- BỘ XỬ LÝ ĐA NĂNG (STUDIO PIPELINE) -->
         <div class="studio-header-bar">
           <div>
-            <h3 style="font-family: 'Outfit', sans-serif; font-size: 1.18rem; font-weight: 700; color: #fff;">
-              🎛️ Bộ Xử Lý Video Đa Năng (Studio Pipeline)
-            </h3>
-            <p style="font-size: 0.84rem; color: var(--text-muted); margin-top: 3px;">
-              Bật/tắt tự do bất kỳ tính năng nào bên dưới. Bạn có thể kết hợp cả 3 hoặc chọn riêng lẻ tùy ý!
-            </p>
+            <h3>Tuỳ chỉnh</h3>
+            <p>Chỉ bật các tính năng bạn cần.</p>
           </div>
           <div class="pipeline-badge-count" id="activeFeaturesCountBadge">
             2/3 tính năng đang bật
@@ -85,15 +90,16 @@
         </div>
 
         <!-- MODULE 1: CẮT & TỐI ƯU THỜI LƯỢNG -->
-        <div class="studio-card active" id="cardTrim">
+        <div class="studio-card active expanded" id="cardTrim">
           <div class="studio-card-header">
             <div class="card-header-left">
               <div class="card-icon-box" style="background: rgba(16, 185, 129, 0.15); color: #34d399;">✂️</div>
               <div>
-                <div class="card-title">Bước 1: Cắt & Tối Ưu Thời Lượng (Smart Trim)</div>
-                <div class="card-subtitle">Lọc bỏ khoảng im lặng ngập ngừng hoặc cắt đầu đuôi thừa</div>
+                <div class="card-title">Cắt video</div>
+                <div class="card-subtitle">Lọc khoảng lặng hoặc cắt mốc</div>
               </div>
             </div>
+            <span class="disclosure" aria-hidden="true"></span>
             <label class="switch" title="Bật/Tắt tính năng cắt">
               <input type="checkbox" id="toggleTrim" checked>
               <span class="switch-slider"></span>
@@ -104,13 +110,13 @@
             <!-- Kiểu cắt (Pills) -->
             <div class="trim-mode-selector">
               <button type="button" class="trim-mode-pill active" data-trim-mode="auto_silence">
-                🎙️ Lọc Khoảng Lặng (Jump-Cut)
+                Lọc khoảng lặng
               </button>
               <button type="button" class="trim-mode-pill" data-trim-mode="intro_outro">
-                ⏱️ Cắt Đầu & Đuôi Thừa
+                Cắt đầu/cuối
               </button>
               <button type="button" class="trim-mode-pill" data-trim-mode="manual">
-                ✂️ Cắt Mốc Thủ Công
+                Thủ công
               </button>
             </div>
 
@@ -119,7 +125,7 @@
               <div class="silence-box" style="border: none; padding: 0; background: none;">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                   <div>
-                    <strong style="font-size: 0.95rem;">Quét & Loại Bỏ Khoảng Im Lặng (Dead Air)</strong>
+                    <strong style="font-size: 0.95rem;">Quét &amp; loại bỏ khoảng im lặng</strong>
                     <p style="font-size: 0.82rem; color: var(--text-muted); margin-top: 2px;">
                       Tự động cắt bỏ những lúc ngập ngừng suy nghĩ, giữ giọng nói liền mạch như TikTok/Reels
                     </p>
@@ -158,7 +164,7 @@
                 <div style="margin-top: 14px; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 12px;">
                   <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                     <span style="font-size: 0.85rem; font-weight: 700; color: #a5b4fc;">🌿 Mức độ mượt mà (Khử giật sau khi cắt):</span>
-                    <span id="smoothProfileDesc" style="font-size: 0.8rem; font-weight: 600; color: var(--accent-emerald);">Tự nhiên & Không giật hình</span>
+                    <span id="smoothProfileDesc" style="font-size: 0.8rem; font-weight: 600; color: var(--accent-emerald);">Tự nhiên &amp; không giật hình</span>
                   </div>
                   <div class="presets-grid" id="smoothPresetsGrid" style="grid-template-columns: repeat(3, 1fr); margin-bottom: 4px;">
                     <div class="preset-chip active" data-profile="ultra_smooth">
@@ -187,7 +193,7 @@
             <!-- Kiểu 2: Cắt đầu & đuôi thừa -->
             <div class="trim-subview" id="subviewIntro">
               <div class="silence-box" style="border: none; padding: 0; background: none;">
-                <strong style="font-size: 0.95rem;">Tự Động Bỏ Đoạn Chờ Lúc Bật & Tắt Camera</strong>
+                <strong style="font-size: 0.95rem;">Tự động bỏ đoạn chờ lúc bật &amp; tắt camera</strong>
                 <p style="font-size: 0.82rem; color: var(--text-muted); margin-top: 3px;">
                   Tự động nhận diện mốc bắt đầu nói đầu tiên và mốc kết thúc nói cuối cùng, cắt bỏ vài giây chuẩn bị.
                 </p>
@@ -226,10 +232,11 @@
             <div class="card-header-left">
               <div class="card-icon-box" style="background: rgba(14, 165, 233, 0.15); color: #38bdf8;">🎭</div>
               <div>
-                <div class="card-title">Bước 2: Xóa Phông Hậu Cảnh AI (Cinematic Bokeh Portrait)</div>
-                <div class="card-subtitle">Nhận diện người bằng Apple Neural Engine và làm mờ phông nền phía sau</div>
+                <div class="card-title">Xóa phông</div>
+                <div class="card-subtitle">Làm mờ nền bằng AI</div>
               </div>
             </div>
+            <span class="disclosure" aria-hidden="true"></span>
             <label class="switch" title="Bật/Tắt tính năng xóa phông">
               <input type="checkbox" id="toggleBokeh">
               <span class="switch-slider"></span>
@@ -296,10 +303,11 @@
             <div class="card-header-left">
               <div class="card-icon-box" style="background: rgba(99, 102, 241, 0.15); color: #818cf8;">⚡</div>
               <div>
-                <div class="card-title">Bước 3: Nén Dung Lượng Mục Tiêu (Apple Silicon VideoToolbox)</div>
-                <div class="card-subtitle">Tối ưu dung lượng để gửi qua Zalo (&lt; 20MB), Discord, Email</div>
+                <div class="card-title">Nén dung lượng</div>
+                <div class="card-subtitle">Tối ưu để chia sẻ nhanh</div>
               </div>
             </div>
+            <span class="disclosure" aria-hidden="true"></span>
             <label class="switch" title="Bật/Tắt tính năng nén">
               <input type="checkbox" id="toggleCompress" checked>
               <span class="switch-slider"></span>
@@ -358,7 +366,6 @@
           <span id="btnProcessLabel">🚀 Bắt Đầu Xử Lý Video</span>
         </button>
       </section>
-      </section>
 
       <!-- Live Progress Panel -->
       <section id="compressProgressPanel" class="compress-progress-panel">
@@ -408,7 +415,7 @@
             ⬇️ Tải Video Về Máy
           </a>
           <button id="btnSaveDownloads" class="btn-secondary btn-save-downloads">
-            📂 Lưu vào Downloads & Mở Finder
+            📂 Lưu vào Downloads &amp; Mở Finder
           </button>
         </div>
 
@@ -421,7 +428,7 @@
   </div>
 
   <!-- Toast Notification -->
-  <div class="toast" id="toast">
+  <div class="toast" id="toast" role="status" aria-live="polite">
     <span id="toastIcon">✅</span>
     <span id="toastMsg">Thao tác thành công!</span>
   </div>

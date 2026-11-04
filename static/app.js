@@ -53,6 +53,30 @@ const videoDuration = document.getElementById('videoDuration');
 const videoDimensions = document.getElementById('videoDimensions');
 const audioTag = document.getElementById('audioTag');
 const btnRemoveFile = document.getElementById('btnRemoveFile');
+const workflowSteps = document.querySelectorAll('.workflow-step');
+let currentWorkflowStep = 'upload';
+
+function resizeWindowForStep(step) {
+  const resize = window.pywebview && window.pywebview.api && window.pywebview.api.resize_for_stage;
+  if (resize) resize(step).catch(() => {});
+}
+
+function setWorkflowStep(step) {
+  currentWorkflowStep = step;
+  const order = ['upload', 'configure', 'export'];
+  const currentIndex = order.indexOf(step);
+  workflowSteps.forEach(item => {
+    const itemIndex = order.indexOf(item.dataset.workflowStep);
+    item.classList.toggle('active', itemIndex === currentIndex);
+    item.classList.toggle('complete', itemIndex < currentIndex);
+    item.setAttribute('aria-current', itemIndex === currentIndex ? 'step' : 'false');
+  });
+  document.body.classList.toggle('workspace-config', step === 'configure');
+  document.body.classList.toggle('workspace-export', step === 'export');
+  resizeWindowForStep(step);
+}
+
+window.addEventListener('pywebviewready', () => resizeWindowForStep(currentWorkflowStep));
 
 // Studio Modular Pipeline Controls
 const activeFeaturesCountBadge = document.getElementById('activeFeaturesCountBadge');
@@ -82,6 +106,37 @@ const cardCompress = document.getElementById('cardCompress');
 const toggleCompress = document.getElementById('toggleCompress');
 const bodyCompress = document.getElementById('bodyCompress');
 let isCompressEnabled = true;
+
+const featureCards = [cardTrim, cardBokeh, cardCompress];
+
+function expandFeatureCard(card) {
+  if (!card || card.classList.contains('disabled')) return;
+  featureCards.forEach(item => {
+    if (!item) return;
+    item.classList.toggle('expanded', item === card);
+    const header = item.querySelector('.studio-card-header');
+    if (header) header.setAttribute('aria-expanded', item === card ? 'true' : 'false');
+  });
+}
+
+featureCards.forEach(card => {
+  const header = card && card.querySelector('.studio-card-header');
+  if (!header) return;
+  header.setAttribute('role', 'button');
+  header.setAttribute('tabindex', '0');
+  header.setAttribute('aria-expanded', card.classList.contains('expanded') ? 'true' : 'false');
+  const openCard = event => {
+    if (event.target.closest('.switch')) return;
+    expandFeatureCard(card);
+  };
+  header.addEventListener('click', openCard);
+  header.addEventListener('keydown', event => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      expandFeatureCard(card);
+    }
+  });
+});
 
 
 // Bokeh elements
@@ -295,6 +350,7 @@ function displayVideoInfo(task) {
   uploadSection.style.display = 'none';
   configSection.style.display = 'block';
   videoCard.style.display = 'block';
+  setWorkflowStep('configure');
 
   videoFilename.innerText = task.filename;
   videoThumb.src = task.thumbnail_url || '';
@@ -370,6 +426,7 @@ if (toggleTrim) {
     isTrimEnabled = toggleTrim.checked;
     cardTrim.classList.toggle('active', isTrimEnabled);
     cardTrim.classList.toggle('disabled', !isTrimEnabled);
+    if (isTrimEnabled) expandFeatureCard(cardTrim);
     updatePipelineUI();
   });
 }
@@ -392,6 +449,7 @@ if (toggleBokeh) {
     isBokehEnabled = toggleBokeh.checked;
     cardBokeh.classList.toggle('active', isBokehEnabled);
     cardBokeh.classList.toggle('disabled', !isBokehEnabled);
+    if (isBokehEnabled) expandFeatureCard(cardBokeh);
     updatePipelineUI();
   });
 }
@@ -402,6 +460,7 @@ if (toggleCompress) {
     isCompressEnabled = toggleCompress.checked;
     cardCompress.classList.toggle('active', isCompressEnabled);
     cardCompress.classList.toggle('disabled', !isCompressEnabled);
+    if (isCompressEnabled) expandFeatureCard(cardCompress);
     updatePipelineUI();
   });
 }
@@ -503,6 +562,7 @@ function resetToUpload() {
   compressProgressPanel.style.display = 'none';
   resultPanel.style.display = 'none';
   uploadSection.style.display = 'block';
+  setWorkflowStep('upload');
   previewPlayer.pause();
   previewPlayer.src = '';
   if (progressPollTimer) clearInterval(progressPollTimer);
@@ -519,6 +579,7 @@ btnStartProcess.addEventListener('click', () => {
   btnStartProcess.disabled = true;
   configSection.style.display = 'none';
   compressProgressPanel.style.display = 'block';
+  setWorkflowStep('export');
   compressProgressFill.style.width = '0%';
   compressPercentText.innerText = '0%';
   compressStageText.innerText = 'Đang khởi động phần cứng Apple Silicon...';
@@ -552,6 +613,7 @@ btnStartProcess.addEventListener('click', () => {
       btnStartProcess.disabled = false;
       configSection.style.display = 'block';
       compressProgressPanel.style.display = 'none';
+      setWorkflowStep('configure');
     }
   })
   .catch(err => {
@@ -559,6 +621,7 @@ btnStartProcess.addEventListener('click', () => {
     btnStartProcess.disabled = false;
     configSection.style.display = 'block';
     compressProgressPanel.style.display = 'none';
+    setWorkflowStep('configure');
   });
 });
 

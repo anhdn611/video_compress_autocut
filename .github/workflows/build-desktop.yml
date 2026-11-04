@@ -46,17 +46,48 @@ jobs:
           chmod +x cinematic_blur
           file cinematic_blur
 
-      - name: Create macOS icon
-        run: python convert_icon.py
+      - name: Check committed app icons
+        run: |
+          test -s static/icons/play-cut.png
+          test -s static/icons/play-cut.icns
+          test -s static/icons/play-cut.ico
+
+      - name: Embed release version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then VERSION="0.0.0-dev"; fi
+          printf '__version__ = "%s"\n' "$VERSION" > build_version.py
 
       - name: Build macOS app bundle
         run: |
           pyinstaller --windowed --noconfirm --clean \
             --add-data "static:static" \
             --add-data "cinematic_blur:." \
-            --icon="icon.icns" \
+            --icon="static/icons/play-cut.icns" \
+            --osx-bundle-identifier="com.anhdn611.video-compress-autocut" \
             --name="$APP_NAME" \
             app.py
+
+      - name: Set app bundle metadata
+        run: |
+          python - <<'PY'
+          import os
+          import plistlib
+          from pathlib import Path
+          from build_version import __version__
+
+          path = Path("dist") / f"{os.environ['APP_NAME']}.app" / "Contents/Info.plist"
+          with path.open("rb") as source:
+              metadata = plistlib.load(source)
+          metadata.update({
+              "CFBundleDisplayName": "Video Studio Pro",
+              "CFBundleShortVersionString": __version__.split("-", 1)[0],
+              "CFBundleVersion": os.environ["GITHUB_RUN_NUMBER"],
+              "NSHumanReadableCopyright": "Video Studio Pro contributors",
+          })
+          with path.open("wb") as destination:
+              plistlib.dump(metadata, destination)
+          PY
 
       - name: Import Developer ID certificate
         if: ${{ env.BUILD_CERTIFICATE_BASE64 != '' }}

@@ -1,36 +1,27 @@
-import os
+"""Manually export app icons after changing static/icons/play-cut.png.
+
+Builds use the committed icon files directly; this is not a build step.
+Requires Pillow in the local development environment.
+"""
+from pathlib import Path
+
 from PIL import Image
 
-def generate_icons_from_favicon_dir(favicon_dir="favicon_io"):
-    candidate_files = [
-        "android-chrome-512x512.png",
-        "android-chrome-192x192.png",
-        "apple-touch-icon.png",
-        "favicon-32x32.png"
-    ]
-    
-    source_path = None
-    for filename in candidate_files:
-        full_path = os.path.join(favicon_dir, filename)
-        if os.path.exists(full_path):
-            source_path = full_path
-            break
 
-    if not source_path:
-        print(f"Bỏ qua: Không tìm thấy file PNG phù hợp trong '{favicon_dir}/'")
-        return
+def generate_icons(source=None):
+    icon_dir = Path(__file__).resolve().parent / "static" / "icons"
+    source = Path(source) if source else icon_dir / "play-cut.png"
+    with Image.open(source) as image:
+        image = image.convert("RGBA")
+        if image.size != (1024, 1024):
+            raise ValueError("The master icon must be 1024 × 1024 pixels.")
+        image.save(icon_dir / "play-cut.ico", format="ICO", sizes=[
+            (16, 16), (24, 24), (32, 32), (48, 48),
+            (64, 64), (128, 128), (256, 256),
+        ])
+        image.save(icon_dir / "play-cut.icns", format="ICNS")
+    print(f"Exported Play Cut icons to {icon_dir}. Commit the PNG, ICNS and ICO together.")
 
-    print(f"Đang tạo icon từ: {source_path}")
-    img = Image.open(source_path)
-
-    # Xuất icon.ico cho Windows
-    ico_sizes = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
-    img.save("icon.ico", format="ICO", sizes=ico_sizes)
-
-    # Xuất icon.icns cho macOS
-    icns_sizes = [(16, 16), (32, 32), (48, 48), (128, 128), (256, 256), (512, 512)]
-    img.save("icon.icns", format="ICNS", sizes=icns_sizes)
-    print("✓ Tạo icon.ico và icon.icns thành công.")
 
 if __name__ == "__main__":
-    generate_icons_from_favicon_dir()
+    generate_icons()
