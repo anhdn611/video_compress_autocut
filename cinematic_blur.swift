@@ -3,6 +3,119 @@ import AVFoundation
 import CoreImage
 import Vision
 
+// Raw-frame mode avoids AVAssetReader/VTDecoderXPCService. Each frame gets its
+// own autorelease pool and at most three encoder pixel buffers are in flight.
+func rawMode() throws {
+    let args = CommandLine.arguments
+    guard args.count >= 7, let width = Int(args[2]), let height = Int(args[3]),
+          width > 0, height > 0, width <= 1920, height <= 1920 else {
+        throw NSError(domain: "Video", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid raw frame dimensions"])
+    }
+    let preview = args[1] == "--raw-preview"
+    let duration = Double(args[4]) ?? 0
+    let destination = URL(fileURLWithPath: args[5])
+    let radius = Double(args[6]) ?? 25
+    let context = CIContext(options: [.useSoftwareRenderer: false, .cacheIntermediates: false])
+    let colorSpace = CGColorSpaceCreateDeviceRGB()
+    let request = VNGeneratePersonSegmentationRequest()
+    request.qualityLevel = args.count > 7 && args[7] == "fast" ? .fast : .balanced
+    request.outputPixelFormat = kCVPixelFormatType_OneComponent8
+    // Avoid repeated Neural Engine compilation during consecutive exports.
+    request.usesCPUOnly = true
+    var writer: AVAssetWriter?
+    var writerInput: AVAssetWriterInput?
+    var adaptor: AVAssetWriterInputPixelBufferAdaptor?
+    if !preview {
+        let output = try AVAssetWriter(outputURL: destination, fileType: .mp4)
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: width, AVVideoHeightKey: height,
+            AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: 4500000, AVVideoAllowFrameReorderingKey: false]
+        ])
+        input.expectsMediaDataInRealTime = false
+        let adapter = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferWidthKey as String: width, kCVPixelBufferHeightKey as String: height,
+            kCVPixelBufferIOSurfacePropertiesKey as String: [:]
+        ])
+        output.add(input)
+        guard output.startWriting() else { throw output.error! }
+        output.startSession(atSourceTime: .zero)
+        writer = output; writerInput = input; adaptor = adapter
+    }
+    defer { context.clearCaches() }
+    let frameBytes = width * height * 4
+    var frameIndex: Int64 = 0
+    while true {
+        let processed = try autoreleasepool { () throws -> Bool in
+            var data = Data()
+            data.reserveCapacity(frameBytes)
+            while data.count < frameBytes {
+                guard let chunk = try FileHandle.standardInput.read(upToCount: frameBytes - data.count), !chunk.isEmpty else {
+                    if data.isEmpty { return false }
+                    throw NSError(domain: "Video", code: 2, userInfo: [NSLocalizedDescriptionKey: "Truncated raw frame"])
+                }
+                data.append(chunk)
+            }
+            let image = CIImage(bitmapData: data, bytesPerRow: width * 4, size: CGSize(width: width, height: height), format: .BGRA8, colorSpace: colorSpace)
+            let handler = VNImageRequestHandler(ciImage: image, options: [:])
+            try handler.perform([request])
+            var result = image
+            if let mask = request.results?.first?.pixelBuffer {
+                let base = CIImage(cvPixelBuffer: mask)
+                let scaled = base.transformed(by: CGAffineTransform(scaleX: image.extent.width / base.extent.width, y: image.extent.height / base.extent.height))
+                let blurred = image.clampedToExtent().applyingFilter("CIGaussianBlur", parameters: ["inputRadius": radius]).cropped(to: image.extent)
+                result = image.applyingFilter("CIBlendWithMask", parameters: ["inputBackgroundImage": blurred, "inputMaskImage": scaled])
+            }
+            if preview {
+                try context.writeJPEGRepresentation(of: result, to: destination, colorSpace: colorSpace, options: [:])
+            } else if let output = writer, let input = writerInput, let adapter = adaptor {
+                while !input.isReadyForMoreMediaData {
+                    if output.status != .writing { throw output.error ?? NSError(domain: "Video", code: 3) }
+                    Thread.sleep(forTimeInterval: 0.005)
+                }
+                guard let pool = adapter.pixelBufferPool else { throw NSError(domain: "Video", code: 4) }
+                var buffer: CVPixelBuffer?
+                let aux = [kCVPixelBufferPoolAllocationThresholdKey as String: 3] as CFDictionary
+                var status = CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(kCFAllocatorDefault, pool, aux, &buffer)
+                while status == kCVReturnWouldExceedAllocationThreshold {
+                    if output.status != .writing { throw output.error ?? NSError(domain: "Video", code: 5) }
+                    Thread.sleep(forTimeInterval: 0.005)
+                    status = CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(kCFAllocatorDefault, pool, aux, &buffer)
+                }
+                guard status == kCVReturnSuccess, let target = buffer else { throw NSError(domain: "Video", code: 6) }
+                context.render(result, to: target, bounds: image.extent, colorSpace: colorSpace)
+                guard adapter.append(target, withPresentationTime: CMTime(value: frameIndex, timescale: 30)) else {
+                    throw output.error ?? NSError(domain: "Video", code: 7)
+                }
+            }
+            return true
+        }
+        if !processed { break }
+        frameIndex += 1
+        if frameIndex % 15 == 0 || preview {
+            let percent = duration > 0 ? min(99, Double(frameIndex) / 30 / duration * 100) : 0
+            print(String(format: "PROGRESS: %.1f%%", percent)); fflush(stdout)
+            context.clearCaches()
+        }
+        if preview { break }
+    }
+    guard frameIndex > 0 else { throw NSError(domain: "Video", code: 8) }
+    if let output = writer, let input = writerInput {
+        input.markAsFinished()
+        output.endSession(atSourceTime: CMTime(value: frameIndex, timescale: 30))
+        let done = DispatchSemaphore(value: 0)
+        output.finishWriting { done.signal() }
+        done.wait()
+        guard output.status == .completed else { throw output.error ?? NSError(domain: "Video", code: 9) }
+    }
+    print("PROGRESS: 100.0%"); fflush(stdout)
+}
+
+if CommandLine.arguments.count > 1 && ["--raw", "--raw-preview"].contains(CommandLine.arguments[1]) {
+    do { try rawMode(); exit(0) }
+    catch { fputs("Bokeh failed: \(error.localizedDescription)\n", stderr); exit(1) }
+}
+
 // Check for single-frame preview mode:
 // Usage 1: cinematic_blur --preview <input_path> <output_jpg> [blur_radius]
 // Usage 2: cinematic_blur <input_path> <output_mp4> [blur_radius] [quality]

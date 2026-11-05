@@ -16,6 +16,8 @@ import tempfile
 
 
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+from video_mcp import VideoControl
+from media_runtime import media_job, run_media, run_bokeh, encoder_args
 
 from build_version import __version__
 
@@ -277,7 +279,7 @@ def analyze_audio_silences(file_path, audio_idx, duration, noise_db=-30, min_dur
         "speech_segments": [tuple(m) for m in merged_speech]
     }
 
-def do_encode_step(input_file, output_file, target_mb, duration, audio_stream_idx, task_dict, is_retry=False, prog_start=45.0, prog_range=50.0):
+def do_encode_step(input_file, output_file, target_mb, duration, audio_stream_idx, task_dict, is_retry=False, prog_start=45.0, prog_range=50.0, hardware_encode=False):
     """Mã hóa nén video bằng Apple Silicon VideoToolbox"""
     audio_bitrate_kbps = 128 if audio_stream_idx is not None else 0
     total_bitrate_kbps = math.floor((target_mb * 8 * 1024) / duration)
@@ -292,15 +294,15 @@ def do_encode_step(input_file, output_file, target_mb, duration, audio_stream_id
     else:
         scale_filter = "scale='min(1920,iw)':-2"
 
-    cmd = ["ffmpeg", "-y", "-i", input_file, "-map", "0:v:0"]
+    cmd = ["ffmpeg", "-v", "error", "-nostdin", "-y", "-threads", "2", "-hwaccel", "none", "-filter_threads", "1", "-i", input_file, "-map", "0:v:0"]
 
     if audio_stream_idx is not None:
         cmd.extend(["-map", f"0:{audio_stream_idx}", "-c:a", "aac", "-b:a", f"{audio_bitrate_kbps}k"])
     else:
         cmd.append("-an")
 
+    cmd.extend(encoder_args(hardware_encode))
     cmd.extend([
-        "-c:v", "h264_videotoolbox",
         "-b:v", f"{video_bitrate_kbps}k",
         "-vf", scale_filter,
         "-progress", "pipe:1",
@@ -308,14 +310,11 @@ def do_encode_step(input_file, output_file, target_mb, duration, audio_stream_id
     ])
 
     with TASKS_LOCK:
-        stage_name = "Đang nén với Apple Silicon..." if not is_retry else "Đang nén lại (Auto-Retry)..."
+        stage_name = ("Đang nén bằng phần cứng, giải mã CPU…" if hardware_encode else "Đang nén bằng CPU (chế độ an toàn)…") if not is_retry else "Đang nén lại (Auto-Retry)…"
         task_dict["stage"] = stage_name
         task_dict["video_bitrate_kbps"] = video_bitrate_kbps
 
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-
-    for line in proc.stdout:
-        line = line.strip()
+    def on_progress(line):
         if line.startswith("out_time_us="):
             try:
                 out_time_s = float(line.split("=")[1]) / 1000000.0
@@ -333,10 +332,23 @@ def do_encode_step(input_file, output_file, target_mb, duration, audio_stream_id
             with TASKS_LOCK:
                 task_dict["speed"] = speed_val
 
-    proc.wait()
-    return proc.returncode == 0
+    run_media(cmd, on_progress)
+    return True
+
 
 def run_trim_and_compress_worker(task_id, params):
+    try:
+        with media_job():
+            _run_trim_and_compress_worker(task_id, params)
+        with TASKS_LOCK:
+            if TASKS[task_id]["status"] == "finishing":
+                TASKS[task_id]["status"] = "completed"
+    except Exception as exc:
+        with TASKS_LOCK:
+            TASKS[task_id].update(status="error", error=str(exc))
+
+
+def _run_trim_and_compress_worker(task_id, params):
     """Worker thực thi phối hợp linh hoạt Cắt đoạn thừa, Xóa phông AI và Nén video"""
     with TASKS_LOCK:
         task = TASKS[task_id]
@@ -344,8 +356,8 @@ def run_trim_and_compress_worker(task_id, params):
         task["progress"] = 5
         task["stage"] = "Đang chuẩn bị xử lý video..."
 
-    input_file = task["input_path"]
-    info = task["info"]
+    input_file = params.get("_source_path", task["input_path"])
+    info = params.get("_source_info", task["info"])
     duration = info["duration"]
     audio_idx = info.get("audio_stream_index")
     mode = params.get("mode", "auto_silence") # auto_silence | intro_outro | manual | none
@@ -353,17 +365,18 @@ def run_trim_and_compress_worker(task_id, params):
     then_compress = params.get("then_compress", False)
     target_mb = float(params.get("target_mb", 18.0))
 
-    has_trim = (mode in ("auto_silence", "intro_outro", "manual"))
+    has_trim = (mode in ("auto_silence", "intro_outro", "manual", "keep_segments"))
 
-    trimmed_file = os.path.join(TEMP_DIR, f"{task_id}_trimmed.mp4")
-    final_output = os.path.join(TEMP_DIR, f"{task_id}_final.mp4")
-    task["output_path"] = final_output
+    run_id = str(uuid.uuid4())[:12]
+    trimmed_file = os.path.join(TEMP_DIR, f"{task_id}_{run_id}_trimmed.mp4")
+    final_output = os.path.join(TEMP_DIR, f"{task_id}_{run_id}_final.mp4")
+    intermediates = [trimmed_file]
 
     try:
         # BƯỚC 1: XỬ LÝ CẮT ĐOẠN THỪA (NẾU CÓ)
         source_for_next = input_file
         
-        if mode == "auto_silence":
+        if mode in ("auto_silence", "keep_segments"):
             with TASKS_LOCK:
                 task["stage"] = "Đang dò tìm và lọc bỏ các khoảng im lặng..."
                 task["progress"] = 12
@@ -372,52 +385,25 @@ def run_trim_and_compress_worker(task_id, params):
             min_silence = float(params.get("min_silence", 1.2))
             pad = float(params.get("pad", 0.28))
             merge_gap = float(params.get("merge_gap", 0.6))
-            silence_res = analyze_audio_silences(input_file, audio_idx, duration, noise_db, min_silence, pad, merge_gap)
-            segments = silence_res["speech_segments"]
+            if mode == "keep_segments":
+                segments = params["segments"]
+            else:
+                silence_res = analyze_audio_silences(input_file, audio_idx, duration, noise_db, min_silence, pad, merge_gap)
+                segments = silence_res["speech_segments"]
 
-            if len(segments) > 1:
+            if segments:
                 with TASKS_LOCK:
                     task["stage"] = f"Đang ghép {len(segments)} đoạn có tiếng nói (Jump-cut)..."
                     task["progress"] = 20
 
-                filters = []
-                inputs_v = []
-                fade_d = 0.03 # 30ms micro-fade khử tiếng lách tách
-                for i, (s, e) in enumerate(segments):
-                    seg_len = round(e - s, 3)
-                    filters.append(f"[0:v]trim=start={s}:end={e},fps=30,setpts=PTS-STARTPTS[v{i}]")
-                    if audio_idx is not None:
-                        if seg_len > 0.1:
-                            fade_out_st = max(0.0, round(seg_len - fade_d, 3))
-                            filters.append(f"[0:{audio_idx}]atrim=start={s}:end={e},asetpts=PTS-STARTPTS,afade=t=in:d={fade_d},afade=t=out:st={fade_out_st}:d={fade_d}[a{i}]")
-                        else:
-                            filters.append(f"[0:{audio_idx}]atrim=start={s}:end={e},asetpts=PTS-STARTPTS[a{i}]")
-                        inputs_v.append(f"[v{i}][a{i}]")
-                    else:
-                        inputs_v.append(f"[v{i}]")
-
-                audio_map_str = ":a=1" if audio_idx is not None else ":a=0"
-                out_channels = "[outv][outa]" if audio_idx is not None else "[outv]"
-                concat_str = "".join(inputs_v) + f"concat=n={len(segments)}:v=1{audio_map_str}{out_channels}"
-                full_filter = ";".join(filters) + ";" + concat_str
-
-                cut_cmd = [
-                    "ffmpeg", "-y", "-i", input_file,
-                    "-filter_complex", full_filter,
-                    "-map", "[outv]"
-                ]
-                if audio_idx is not None:
-                    cut_cmd.extend(["-map", "[outa]", "-c:a", "aac", "-b:a", "128k"])
-
-                cut_cmd.extend([
-                    "-c:v", "h264_videotoolbox",
-                    "-b:v", "4000k",
-                    trimmed_file
-                ])
-
-                proc = subprocess.run(cut_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                if proc.returncode == 0 and os.path.exists(trimmed_file):
-                    source_for_next = trimmed_file
+                from low_memory_render import render_segments
+                def report_segment(done, total):
+                    with TASKS_LOCK:
+                        task["stage"] = f"Đang xuất tuần tự đoạn {done}/{total} (tiết kiệm RAM)…"
+                        task["progress"] = round(20 + 5 * done / total, 1)
+                render_segments(input_file, trimmed_file, segments, audio_idx,
+                                smooth=bool(params.get("_smooth")), progress=report_segment, hardware_encode=params.get("hardware_encode") is True)
+                source_for_next = trimmed_file
             
         elif mode == "intro_outro":
             with TASKS_LOCK:
@@ -429,15 +415,15 @@ def run_trim_and_compress_worker(task_id, params):
             end_s = max(0.0, duration - silence_res.get("outro_silence", 0.0))
             if end_s > start_s + 1.0:
                 cut_cmd = [
-                    "ffmpeg", "-y", "-ss", str(start_s), "-to", str(end_s),
+                    "ffmpeg", "-v", "error", "-nostdin", "-y", "-threads", "2", "-hwaccel", "none", "-filter_threads", "1", "-ss", str(start_s), "-to", str(end_s),
                     "-i", input_file,
                     "-map", "0:v:0"
                 ]
                 if audio_idx is not None:
                     cut_cmd.extend(["-map", f"0:{audio_idx}", "-c:a", "copy"])
                 cut_cmd.extend(["-c:v", "copy", trimmed_file])
-                proc = subprocess.run(cut_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                if proc.returncode == 0 and os.path.exists(trimmed_file):
+                run_media(cut_cmd)
+                if os.path.exists(trimmed_file):
                     source_for_next = trimmed_file
 
         elif mode == "manual":
@@ -448,15 +434,15 @@ def run_trim_and_compress_worker(task_id, params):
                 task["progress"] = 15
 
             cut_cmd = [
-                "ffmpeg", "-y", "-ss", str(start_s), "-to", str(end_s),
+                "ffmpeg", "-v", "error", "-nostdin", "-y", "-threads", "2", "-hwaccel", "none", "-filter_threads", "1", "-ss", str(start_s), "-to", str(end_s),
                 "-i", input_file,
                 "-map", "0:v:0"
             ]
             if audio_idx is not None:
                 cut_cmd.extend(["-map", f"0:{audio_idx}", "-c:a", "aac", "-b:a", "128k"])
-            cut_cmd.extend(["-c:v", "h264_videotoolbox", "-b:v", "3500k", trimmed_file])
-            proc = subprocess.run(cut_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            if proc.returncode == 0 and os.path.exists(trimmed_file):
+            cut_cmd.extend(encoder_args(params.get("hardware_encode") is True) + ["-b:v", "3500k", trimmed_file])
+            run_media(cut_cmd)
+            if os.path.exists(trimmed_file):
                 source_for_next = trimmed_file
 
         # BƯỚC 2: LÀM MỜ HẬU CẢNH BẰNG APPLE VISION AI (BOKEH)
@@ -476,32 +462,27 @@ def run_trim_and_compress_worker(task_id, params):
 
             blur_radius = float(params.get("blur_radius", 25.0))
             quality = params.get("bokeh_quality", "balanced")
-            blurred_raw_video = os.path.join(TEMP_DIR, f"{task_id}_bokeh_raw.mp4")
-            blurred_with_audio = os.path.join(TEMP_DIR, f"{task_id}_bokeh.mp4")
+            blurred_raw_video = os.path.join(TEMP_DIR, f"{task_id}_{run_id}_bokeh_raw.mp4")
+            blurred_with_audio = os.path.join(TEMP_DIR, f"{task_id}_{run_id}_bokeh.mp4")
 
             blur_bin = os.path.join(BASE_DIR, "cinematic_blur")
-            proc_blur = subprocess.Popen([blur_bin, source_for_next, blurred_raw_video, str(blur_radius), quality], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-
-            for line in proc_blur.stdout:
-                line = line.strip()
+            intermediates.extend([blurred_raw_video, blurred_with_audio])
+            def on_bokeh_progress(line):
                 if line.startswith("PROGRESS:"):
-                    try:
-                        pct_val = float(line.replace("PROGRESS:", "").replace("%", "").strip())
-                        with TASKS_LOCK:
-                            task["progress"] = round(bokeh_start + (pct_val / 100.0) * bokeh_range, 1)
-                    except Exception:
-                        pass
-            proc_blur.wait()
-
-            if proc_blur.returncode == 0 and os.path.exists(blurred_raw_video):
-                temp_audio_idx = get_video_info(source_for_next).get("audio_stream_index")
-                mux_cmd = ["ffmpeg", "-y", "-i", blurred_raw_video, "-i", source_for_next, "-map", "0:v:0"]
-                if temp_audio_idx is not None:
-                    mux_cmd.extend(["-map", f"1:{temp_audio_idx}", "-c:a", "aac", "-b:a", "128k"])
-                mux_cmd.extend(["-c:v", "copy", blurred_with_audio])
-                subprocess.run(mux_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                if os.path.exists(blurred_with_audio):
-                    source_for_next = blurred_with_audio
+                    pct_val = float(line.replace("PROGRESS:", "").replace("%", "").strip())
+                    with TASKS_LOCK:
+                        task["progress"] = round(bokeh_start + pct_val / 100 * bokeh_range, 1)
+            with TASKS_LOCK:
+                task["stage"] = "Đang xóa phông an toàn: giải mã CPU, tối đa 1080p, giải phóng từng frame…"
+            run_bokeh(source_for_next, blurred_raw_video, get_video_info(source_for_next),
+                      blur_bin, blur_radius, quality, on_bokeh_progress)
+            temp_audio_idx = get_video_info(source_for_next).get("audio_stream_index")
+            mux_cmd = ["ffmpeg", "-v", "error", "-nostdin", "-y", "-i", blurred_raw_video, "-i", source_for_next, "-map", "0:v:0"]
+            if temp_audio_idx is not None:
+                mux_cmd.extend(["-map", f"1:{temp_audio_idx}", "-c:a", "aac", "-b:a", "128k"])
+            mux_cmd.extend(["-c:v", "copy", "-shortest", blurred_with_audio])
+            run_media(mux_cmd)
+            source_for_next = blurred_with_audio
 
         # Cập nhật thông số sau khi cắt và/hoặc xóa phông
         new_info = get_video_info(source_for_next)
@@ -521,7 +502,7 @@ def run_trim_and_compress_worker(task_id, params):
                 task["stage"] = "Đang nén video xuống dưới mức dung lượng mục tiêu..."
                 task["progress"] = round(comp_start, 1)
 
-            success = do_encode_step(source_for_next, final_output, target_mb, new_duration, new_audio_idx, task, prog_start=comp_start, prog_range=comp_range)
+            success = do_encode_step(source_for_next, final_output, target_mb, new_duration, new_audio_idx, task, prog_start=comp_start, prog_range=comp_range, hardware_encode=params.get("hardware_encode") is True)
             if not success or not os.path.exists(final_output):
                 with TASKS_LOCK:
                     task["status"] = "error"
@@ -535,7 +516,7 @@ def run_trim_and_compress_worker(task_id, params):
             # Auto-retry nếu vượt quá mục tiêu
             if out_size_mb > max_allowed:
                 retry_target = round(target_mb * (target_mb / out_size_mb) * 0.95, 1)
-                do_encode_step(source_for_next, final_output, retry_target, new_duration, new_audio_idx, task, is_retry=True, prog_start=comp_start, prog_range=comp_range)
+                do_encode_step(source_for_next, final_output, retry_target, new_duration, new_audio_idx, task, is_retry=True, prog_start=comp_start, prog_range=comp_range, hardware_encode=params.get("hardware_encode") is True)
                 out_size_bytes = os.path.getsize(final_output)
                 out_size_mb = round(out_size_bytes / (1024 * 1024), 2)
         else:
@@ -559,7 +540,9 @@ def run_trim_and_compress_worker(task_id, params):
         if has_trim and mode != "none":
             if mode == "auto_silence": parts.append("silence_cut")
             elif mode == "intro_outro": parts.append("trimmed")
-            elif mode == "manual": parts.append("cut")
+            elif mode in ("manual", "keep_segments"): parts.append("cut")
+        if params.get("_smooth"):
+            parts.append("ai_refined")
         if enable_bokeh:
             parts.append("bokeh")
         if then_compress:
@@ -571,7 +554,10 @@ def run_trim_and_compress_worker(task_id, params):
         final_filename = f"{clean_base}_{'_'.join(parts)}.mp4"
 
         with TASKS_LOCK:
-            task["status"] = "completed"
+            task["output_path"] = final_output
+            task["output_revision"] = run_id
+            task["output_info"] = final_info
+            task["status"] = "finishing"
             task["progress"] = 100
             task["stage"] = "Xử lý hoàn tất!"
             task["result"] = {
@@ -589,7 +575,20 @@ def run_trim_and_compress_worker(task_id, params):
         with TASKS_LOCK:
             task["status"] = "error"
             task["error"] = str(e)
+    finally:
+        for temporary_path in intermediates:
+            try:
+                os.unlink(temporary_path)
+            except FileNotFoundError:
+                pass
+        if task.get("output_path") != final_output:
+            try:
+                os.unlink(final_output)
+            except FileNotFoundError:
+                pass
 
+
+CONTROL = VideoControl(TASKS, TASKS_LOCK, run_trim_and_compress_worker, analyze_audio_silences)
 
 class VideoCompressorHandler(BaseHTTPRequestHandler):
     def end_headers(self):
@@ -701,6 +700,8 @@ class VideoCompressorHandler(BaseHTTPRequestHandler):
                     "stage": task.get("stage", ""),
                     "speed": task.get("speed", ""),
                     "error": task.get("error", None),
+                    "mcp_job_id": task.get("mcp_job_id"),
+                    "ai_stage": task.get("ai_stage", ""),
                     "result": task.get("result", None)
                 }
             self.send_json(data)
@@ -715,7 +716,7 @@ class VideoCompressorHandler(BaseHTTPRequestHandler):
                 self.send_error(404, "Output file not found")
                 return
 
-            filename = task.get("result", {}).get("output_filename", f"{task_id}.mp4")
+            filename = (task.get("result") or {}).get("output_filename", f"{task_id}.mp4")
             file_size = os.path.getsize(task["output_path"])
             self.send_response(200)
             self.send_header("Content-Type", "video/mp4")
@@ -725,6 +726,60 @@ class VideoCompressorHandler(BaseHTTPRequestHandler):
 
             with open(task["output_path"], "rb") as f:
                 shutil.copyfileobj(f, self.wfile)
+            return
+
+        if path == "/api/review-source":
+            job_id = query.get("job_id", [""])[0]
+            with TASKS_LOCK:
+                pending = CONTROL.pending_reviews.get(job_id)
+                record = CONTROL.transcripts.get(pending["transcript_id"]) if pending else None
+                file_path = record["path"] if record else None
+            if not file_path or not os.path.isfile(file_path):
+                self.send_error(404, "Review source unavailable")
+                return
+            size = os.path.getsize(file_path)
+            start, end, status = 0, size - 1, 200
+            byte_range = self.headers.get("Range")
+            if byte_range:
+                match = re.fullmatch(r"bytes=(\d*)-(\d*)", byte_range)
+                try:
+                    if not match or not any(match.groups()):
+                        raise ValueError()
+                    left, right = match.groups()
+                    if left:
+                        start, end = int(left), min(int(right), size - 1) if right else size - 1
+                    else:
+                        start = max(0, size - int(right))
+                    if start < 0 or start > end or start >= size:
+                        raise ValueError()
+                    status = 206
+                except ValueError:
+                    self.send_response(416)
+                    self.send_header("Content-Range", f"bytes */{size}")
+                    self.end_headers()
+                    return
+            self.send_response(status)
+            self.send_header("Content-Type", "video/quicktime" if file_path.lower().endswith(".mov") else "video/mp4")
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(end - start + 1))
+            if status == 206:
+                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            self.end_headers()
+            if self.command == "HEAD":
+                return
+            try:
+                with open(file_path, "rb") as source:
+                    source.seek(start)
+                    remaining = end - start + 1
+                    while remaining:
+                        chunk = source.read(min(1024 * 1024, remaining))
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        remaining -= len(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
             return
 
         # Stream / preview video
@@ -751,6 +806,80 @@ class VideoCompressorHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         url = urllib.parse.urlparse(self.path)
         path = url.path
+
+        origin = self.headers.get("Origin")
+        expected_origin = f"http://127.0.0.1:{self.server.server_port}"
+        if origin and origin != expected_origin:
+            self.send_json({"error": "invalid_origin"}, 403)
+            return
+
+        if path.startswith("/api/ai/"):
+            # Settings and keys are accepted only from this app's own page.
+            if origin != expected_origin:
+                self.send_json({"error": "invalid_origin"}, 403)
+                return
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                if not 0 < length <= 65536:
+                    raise ValueError("invalid_request_size")
+                data = json.loads(self.rfile.read(length))
+                import cloud_models
+                if path == "/api/ai/settings":
+                    result = cloud_models.profiles()
+                    result["selected_video"] = CONTROL.snapshot()
+                    with TASKS_LOCK:
+                        result["active_jobs"] = [dict(job_id=j["job_id"], status=j["status"]) for j in CONTROL.cloud_runs.values() if j["status"] in ("running", "awaiting_review")]
+                elif path == "/api/ai/save":
+                    result = cloud_models.save_profile(data)
+                elif path == "/api/ai/select":
+                    result = cloud_models.select_profile(data.get("id"))
+                elif path == "/api/ai/delete":
+                    result = cloud_models.delete_profile(data.get("id"))
+                elif path == "/api/ai/models":
+                    result = {"models": cloud_models.preview_models(data)}
+                elif path == "/api/ai/start":
+                    snapshot = CONTROL.snapshot()
+                    args = {k: snapshot[k] for k in ("instance_id", "video_id", "selection_revision")}
+                    result = CONTROL.start_cloud(dict(args, profile_id=data.get("profile_id"), request_id=data.get("request_id"), target_mb=data.get("target_mb", 24), then_compress=data.get("then_compress", True), hardware_encode=data.get("hardware_encode", False)))
+                elif path == "/api/ai/approve":
+                    result = CONTROL.approve_review(data)
+                elif path == "/api/ai/cancel":
+                    result = CONTROL.cancel_review(data.get("job_id"))
+                elif path == "/api/ai/job":
+                    result = CONTROL.call("get_job", {"job_id": data.get("job_id")})
+                else:
+                    raise ValueError("unknown_action")
+                self.send_json(result)
+            except (ValueError, KeyError, TypeError) as e:
+                self.send_json({"error": str(e)}, 400)
+            return
+
+        if path == "/api/mcp":
+            import secrets
+            if not secrets.compare_digest(self.headers.get("Authorization", ""), "Bearer " + CONTROL.token):
+                self.send_json({"error": "unauthorized"}, 401)
+                return
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                if not 0 < length <= 65536:
+                    raise ValueError("invalid_request_size")
+                data = json.loads(self.rfile.read(length))
+                self.send_json(CONTROL.call(data["action"], data.get("args", {})))
+            except (ValueError, KeyError, TypeError) as e:
+                self.send_json({"error": str(e)}, 400)
+            return
+
+        if path == "/api/selection":
+            try:
+                data = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+                with TASKS_LOCK:
+                    # A delayed reset must not clear a more recently uploaded video.
+                    if data.get("previous_id") == CONTROL.selected:
+                        CONTROL.select(None)
+                self.send_json({"success": True})
+            except (ValueError, TypeError) as e:
+                self.send_json({"error": str(e)}, 400)
+            return
 
         # Upload video directly
         if path == "/api/upload":
@@ -793,6 +922,7 @@ class VideoCompressorHandler(BaseHTTPRequestHandler):
                         "status": "ready",
                         "created_at": time.time()
                     }
+                    CONTROL.select(task_id)
 
                 self.send_json({
                     "id": task_id,
@@ -823,7 +953,12 @@ class VideoCompressorHandler(BaseHTTPRequestHandler):
             input_path = task["input_path"]
             preview_out = os.path.join(TEMP_DIR, f"{task_id}_bokeh_preview.jpg")
             blur_bin = os.path.join(BASE_DIR, "cinematic_blur")
-            subprocess.run([blur_bin, "--preview", input_path, preview_out, str(blur_radius)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                with media_job():
+                    run_bokeh(input_path, preview_out, task["info"], blur_bin, blur_radius, preview=True)
+            except Exception as exc:
+                self.send_json({"error": str(exc)}, 409)
+                return
 
             self.send_json({"preview_url": f"/api/bokeh-preview-image?id={task_id}&t={int(time.time())}"})
             return
@@ -863,12 +998,24 @@ class VideoCompressorHandler(BaseHTTPRequestHandler):
             content_length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(content_length).decode("utf-8")
             params = json.loads(body)
+            params = {k: v for k, v in params.items() if not k.startswith("_")}
             task_id = params.get("id")
+            if params.get("mode") == "keep_segments":
+                self.send_json({"error": "Use validated MCP process_video for keep_segments"}, 400)
+                return
 
             with TASKS_LOCK:
                 if task_id not in TASKS:
                     self.send_json({"error": "Task not found"}, 404)
                     return
+
+                if any(p["base"]["video_id"] == task_id for p in CONTROL.pending_reviews.values()):
+                    self.send_json({"error": "Duyệt hoặc hủy đề xuất AI trước khi xuất."}, 409)
+                    return
+                if any(t["status"] in ("processing", "finishing") for t in TASKS.values()):
+                    self.send_json({"error": "busy"}, 409)
+                    return
+                TASKS[task_id].update(status="processing", progress=0, result=None, error=None)
 
             t = threading.Thread(target=run_trim_and_compress_worker, args=(task_id, params), daemon=True)
             t.start()
@@ -890,7 +1037,7 @@ class VideoCompressorHandler(BaseHTTPRequestHandler):
                 self.send_json({"error": "File not found"}, 404)
                 return
 
-            out_filename = task.get("result", {}).get("output_filename", f"processed_{task_id}.mp4")
+            out_filename = (task.get("result") or {}).get("output_filename", f"processed_{task_id}.mp4")
             dest_path = os.path.join(DOWNLOADS_DIR, out_filename)
 
             base, ext = os.path.splitext(dest_path)
@@ -922,6 +1069,7 @@ def start_server(port=8765):
     else:
         raise OSError(f"Không thể mở cổng từ {port} đến {port + 19}.")
     url = f"http://127.0.0.1:{port}"
+    CONTROL.publish(port)
     print(f"🚀 Video Studio Pro đang chạy tại: {url}")
     return server, url
 
@@ -939,7 +1087,7 @@ if __name__ == "__main__":
 
     # Tạo và hiển thị cửa sổ Desktop độc lập
     webview.create_window(
-        title="Video Studio Pro",
+        title="Video Studio Pro — Safe Export",
         url=url,
         width=860,
         height=560,
@@ -955,3 +1103,4 @@ if __name__ == "__main__":
     print("\nĐã đóng giao diện, đang dừng hệ thống...")
     server.shutdown()
     server.server_close()
+    CONTROL.close()

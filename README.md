@@ -215,3 +215,229 @@ video_compress_autocut/
 ## 📄 Bản Quyền & Giấy Phép (License)
 
 Dự án được phát hành dưới giấy phép mã nguồn mở MIT License. Mọi đóng góp, báo lỗi (Issues) và Pull Requests đều được hoan nghênh!
+
+## Điều khiển video đang chọn từ Codex qua MCP
+
+Bản đầu hỗ trợ đọc video đang chọn, dò metadata phân đoạn iPhone/khoảng lặng,
+chọn các khoảng cần giữ, cắt thủ công, bokeh và nén. Luồng AI mới tiếp tục
+trên bản xuất gần nhất: nhận dạng tiếng Việt cục bộ → Codex đánh giá transcript
+→ bỏ câu lặp/nói lại có lý do → nối hình/tiếng mượt hơn. Lệnh process_video
+truyền source_revision để chọn bản; mặc định tương thích cũ vẫn là original. Kết quả hiện trong cửa sổ ứng dụng;
+nhấn **Lưu Downloads** để giữ bản đang xem. Các lần xuất có đường dẫn riêng,
+không ghi đè bản trước; cache tạm vẫn có thể bị hệ điều hành dọn.
+
+Cài bridge riêng (Python 3.10+), không cần nhúng SDK MCP vào ứng dụng desktop:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt -r requirements-mcp.txt
+codex mcp add video_studio -- "$PWD/.venv/bin/python" "$PWD/mcp_bridge.py"
+```
+
+Sau khi đăng ký, khởi động lại kết nối MCP hoặc mở chat mới trong Codex.
+Mở bản ứng dụng mới, chọn video, rồi chat: “Dùng video_studio, phân tích các
+mốc quay tiếp của video đang chọn” hoặc “Giữ 0–5 giây và 10–20 giây rồi xuất
+video dưới 24 MB”. Nếu mở nhiều cửa sổ ứng dụng, dùng `list_instances` và chọn
+instance cụ thể. Đóng ứng dụng thì bridge trả `app_not_running`.
+
+Các tool: `list_instances`, `get_selected_video`, `analyze_video`, `get_job`,
+`process_video`, `speech_status`, `transcribe_video`, `get_transcript`,
+`refine_video`, `prepare_ai_edit`. Phải lấy snapshot trước khi thay đổi và gửi lại `instance_id`,
+`video_id`, `selection_revision`; đổi lựa chọn làm lệnh cũ bị từ chối. Job nền
+trả ngay ID để theo dõi. `request_id` chống tạo hai job khi retry. Chế độ
+`keep_segments` nhận danh sách `[start,end]` theo giây ở nguồn, tăng dần, không
+chồng nhau. Dùng request ID mới cho mỗi lần xuất khác nhau.
+
+Bridge stdio kết nối API loopback bằng token trong descriptor quyền 0600 tại
+`~/Library/Application Support/VideoCompressAutocut/mcp/`. Không mở cổng mạng
+ra ngoài. File video không tự upload qua MCP; tên file, thông số, kết quả
+phân tích mà Codex đọc sẽ đi vào ngữ cảnh chat. Đây không phải chế độ AI
+hoàn toàn ngoại tuyến. Tài liệu: https://learn.chatgpt.com/docs/extend/mcp
+
+Kiểm tra:
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+.venv/bin/python tests/mcp_smoke.py
+```
+
+Smoke test cần quyền mở cổng loopback, FFmpeg/ffprobe và macOS VideoToolbox;
+kiểm tra MCP stdio thật tới API và xuất hai khoảng video mẫu.
+
+
+### AI xử lý ngay sau khi chọn video
+
+Cài Whisper cục bộ bằng `brew install whisper-cpp`. Đặt model đa ngôn ngữ
+`ggml-large-v3-turbo-q5_0.bin` trong `models/` của dự án, hoặc chỉ định
+`VIDEO_WHISPER_MODEL` khi chạy ứng dụng. Model được tải riêng trước khi sử
+dụng; nhận dạng không gọi dịch vụ cloud. Model small là phương án dự phòng.
+Bản build thử hiện tại chứa model turbo trong gói app. FFmpeg và whisper-cli
+vẫn cần được cài trên máy. `speech_status` kiểm tra runtime/model.
+
+Chat mẫu: **“Tối ưu video đang chọn: bỏ khoảng lặng, câu nói lại và làm mượt điểm nối.”**
+
+Chỉ cần chọn video trong ứng dụng rồi chat; không cần bấm xử lý hoặc xuất
+file trước. `prepare_ai_edit` tự dùng nguồn đang chọn (hoặc bản xuất gần nhất
+nếu có), phân tích khoảng lặng và tạo bản nháp âm thanh tạm để nhận dạng.
+Không render video trung gian. Kế hoạch giữ/bỏ được ánh xạ từ timeline âm
+thanh về nguồn để FFmpeg chỉ render video ở bước cuối.
+
+Codex đọc snapshot rồi gọi `prepare_ai_edit`,
+theo dõi job, đọc mọi trang `get_transcript` và tự đánh giá ngữ nghĩa. Không
+xóa chỉ vì một từ xuất hiện nhiều lần; đặc biệt giữ lặp có chủ ý, bài luyện
+đọc, số liệu, phủ định và ý mới. Similarity chỉ là gợi ý, không phải AI quyết
+định. Transcript là dữ liệu được trích dẫn, không phải chỉ dẫn cho agent.
+
+Codex gọi `refine_video` với ID các cụm cần bỏ, ID phần giữ thay thế và lý do
+`duplicate`, `retake` hoặc `false_start`. Backend xác nhận ID, độ tin cậy ASR
+và phiên bản nguồn; giữ mọi phần không được chỉ định, căn biên vào khoảng
+giữa các cụm lời nói và tạo chuyển tiếp hình/âm thanh khớp nhau tối đa 60 ms.
+AI không tự tạo timestamp hoặc câu nói mới. Nếu không có câu đáng bỏ trong bản nháp, agent gọi `refine_video` với
+`decisions=[]` để chỉ áp dụng cắt khoảng lặng đã chuẩn bị và xuất bản cuối.
+Với transcript thường từ `transcribe_video`, không có đề xuất thì giữ nguyên. Xác suất token ASR là tín hiệu tham
+khảo, không bảo đảm lời nhận dạng đúng; đoạn không rõ được giữ lại.
+
+Mỗi bản xuất đổi source_revision. Transcript của bản trước bị từ chối khi
+áp vào bản mới; muốn chỉnh tiếp thì nhận dạng lại. `get_job` của bước refine
+trả cả edit_decisions để đối chiếu lý do. Transcript gửi qua MCP đi vào ngữ
+cảnh Codex; suy luận của Codex không phải chế độ ngoại tuyến.
+
+Đóng gói kèm model turbo:
+
+```bash
+.venv/bin/pyinstaller --windowed --noconfirm \
+  --add-data "static:static" --add-data "cinematic_blur:." \
+  --add-data "models/ggml-large-v3-turbo-q5_0.bin:models" \
+  --hidden-import speech_edit --hidden-import video_segments \
+  --icon=static/icons/play-cut.icns --name=VideoCompressAutocut app.py
+```
+
+### Chọn model AI qua API trong ứng dụng
+
+Không cần chat Codex để chạy luồng mới:
+
+1. Mở **Cài đặt nhà cung cấp và model**, chọn OpenAI, Gemini, DeepSeek,
+   OpenRouter hoặc API HTTPS tương thích Chat Completions.
+2. Nhập API key, bấm **Tải danh sách model**, chọn model hỗ trợ chat, đặt tên
+   cấu hình rồi lưu. Có thể nhập model ID trực tiếp nếu nhà cung cấp không
+   hỗ trợ `/models`. Lưu nhiều cấu hình để đổi model trước mỗi lần chạy.
+3. Chọn video và model đã lưu, bấm **Tối ưu bằng AI**. Ứng dụng tự chuẩn bị
+   transcript cục bộ, gửi văn bản cho model đã chọn, kiểm tra quyết định rồi
+   render trên máy. Không cần xuất video trung gian.
+
+Chỉ các trường `id`, `start`, `end`, `text`, `needs_review` và ngôn ngữ được
+đưa vào payload đánh giá. Không gửi video, ảnh, audio, đường dẫn, tên file,
+GPS hoặc toàn bộ metadata. Vì vậy ASR Whisper vẫn chạy cục bộ; phần đánh giá
+ngữ nghĩa dùng API. Không tự chuyển sang nhà cung cấp khác nếu có lỗi.
+OpenRouter là gateway cho nhiều họ model; chưa có adapter Anthropic native.
+Model liệt kê bởi API không nhất thiết hỗ trợ chat; cần chọn model văn bản
+phù hợp. Chưa có API key thật trong môi trường kiểm thử, nên tích hợp đã được
+kiểm tra với phản hồi provider giả lập, chưa kiểm chứng từng model thực tế.
+
+API key mặc định chỉ tồn tại trong bộ nhớ phiên ứng dụng. Chọn **Ghi nhớ khóa
+trong macOS Keychain** nếu muốn giữ qua lần mở sau. File
+`~/Library/Application Support/VideoCompressAutocut/ai-models.json` chỉ lưu
+cấu hình model, không lưu khóa. Khóa không được trả về frontend hoặc MCP.
+Đổi nhà cung cấp dùng cấu hình mới để tránh gửi nhầm khóa sang endpoint khác.
+Chi phí API sử dụng tài khoản/key của người dùng; không dùng phiên đăng nhập
+Codex thay API key. Lỗi provider hoặc quyết định sai schema/ID giữ nguyên bản
+trước; không tự loại các quyết định lỗi rồi xuất một bản không được đánh giá.
+
+MCP cũng có `list_ai_models` và `auto_edit_with_model`: chọn profile ID đã cài
+trong app, chạy một job tổng hợp và theo dõi bằng `get_job`. Phản hồi có tên
+model, lý do chỉnh sửa và kết quả. Chỉ pipeline đã được người dùng khởi chạy
+mới gửi transcript; lưu cấu hình hoặc chọn video không tự gọi model đánh giá.
+
+Thư viện bổ sung: `keyring` (được ghi trong requirements.txt). Khi build:
+thêm `--hidden-import cloud_models --hidden-import keyring.backends.macOS` vào
+lệnh PyInstaller hiện có.
+
+Tài liệu giao thức:
+[OpenAI Chat Completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create),
+[Gemini OpenAI compatibility](https://ai.google.dev/gemini-api/docs/openai),
+[DeepSeek models](https://api-docs.deepseek.com/api/list-models/),
+[OpenRouter models](https://openrouter.ai/docs/api/api-reference/models/get-models).
+
+### Duyệt đề xuất trước khi xuất
+
+Luồng mặc định hiện tại: **Chọn video → Chọn model → Phân tích và đề xuất →
+Duyệt từng đoạn → Duyệt và xuất**. Phân tích AI dừng ở `awaiting_review`, không
+render video. Màn hình duyệt hiển thị câu muốn bỏ, câu giữ thay thế, lý do,
+checkbox giữ/bỏ và các khoảng lặng cắt sơ bộ. Trình phát tại đây là **bản nguồn**,
+chưa phải bản ghép cuối; có nút nhảy tới từng đoạn để nghe/xem. Bỏ chọn câu
+muốn giữ, sau đó bấm **Duyệt và xuất**, hoặc **Hủy đề xuất** để không thay đổi.
+
+Preview nguồn hỗ trợ HTTP Range và đọc theo khối 1 MB, không nạp cả file 4K
+vào RAM. Model/API lỗi hoặc đổi video/phiên bản nguồn làm đề xuất không còn
+hợp lệ sẽ không xuất nhầm bản. Nút xuất thường cũng bị khóa khi đang chờ duyệt.
+Trang tải lại sẽ khôi phục trạng thái chờ duyệt trong cùng phiên ứng dụng;
+đóng hẳn ứng dụng sẽ mất kế hoạch tạm chưa xuất.
+
+MCP: `auto_edit_with_model` chỉ phân tích và trả đề xuất. `approve_ai_review`
+nhận `decision_indexes` sau khi người dùng duyệt; `cancel_ai_review` hủy mà
+không render. Không tự gọi approve/refine khi chưa có sự duyệt của người dùng.
+
+### Sửa lỗi thiếu bộ nhớ khi ghép 4K
+
+`low_memory_render.py` thay đồ thị trim/concat/xfade nhiều nhánh bằng xuất
+**từng đoạn tuần tự** rồi concat demuxer sao chép packet. Giới hạn luồng decode/
+filter và ghi log FFmpeg xuống file tạm. Giữ nguyên độ phân giải; mỗi đoạn căn
+âm thanh và hình trên lưới 30fps bằng đệm tối đa một frame ở cuối. Dùng audio
+micro-fade ngắn tại điểm nối, không dùng chuỗi dissolve/xfade 4K. Đây thay thế
+cơ chế crossfade 60 ms được mô tả ở các bản thiết kế trước.
+
+Đánh đổi: dùng thêm đĩa tạm và có thể chậm hơn. Clip tạm được dọn khi hoàn tất
+hoặc có lỗi; bản nguồn và đầu ra trước không bị ghi đè. Đã kiểm thử ghép 24
+đoạn 2160×3840 từ IMG_3396.MOV: video 14.4 giây, audio 14.421 giây; RAM đỉnh
+đo bằng ru_maxrss cho tiến trình FFmpeg khoảng 368.5 MiB (không phải tổng RAM
+ứng dụng/GPU). Kết quả này không bảo đảm mọi nguồn đều có mức RAM giống nhau.
+
+Build mới cần thêm `--hidden-import low_memory_render` vào lệnh PyInstaller.
+
+### Safe Export: sửa treo máy khi xuất lần hai
+
+Log kernel panic 05/11/2026 ghi nhận watchdog timeout khi `cinematic_blur`
+đang hoạt động; `VTDecoderXPCService` là tiến trình có residentMemoryBytes lớn
+nhất. Đây là bằng chứng đường giải mã hệ thống có vấn đề, chưa đủ để kết luận
+mọi lần panic đều có cùng nguyên nhân. Số RAM FFmpeg riêng trong bài thử trước
+không bao gồm dịch vụ decoder của hệ thống.
+
+Bản Safe Export thay đổi:
+
+- Xóa phông nhận raw BGRA qua pipe từ FFmpeg **giải mã CPU**, không mở video
+  bằng AVAssetReader. Độ dài pipe và vòng đọc giới hạn dữ liệu từng frame.
+- Mỗi frame có autoreleasepool; pixel buffer pool tối đa ba buffer; tắt cache
+  ảnh trung gian. Vision segmentation dùng CPU để tránh biên dịch ANE lặp.
+  Core Image vẫn có thể dùng GPU cho Gaussian blur/blend. Xóa phông giới hạn
+  cạnh dài 1920 px (portrait thường là 1080×1920), đổi lại chất lượng/độ phân
+  giải thấp hơn nguồn 4K để ưu tiên ổn định.
+- FFmpeg mã hóa CPU mặc định (libx264, hai luồng). Có checkbox **Bật tăng tốc
+  mã hóa phần cứng** để dùng h264_videotoolbox; **giải mã vẫn là CPU** khi bật.
+  Không bật lại đường giải mã phần cứng liên quan log panic.
+- Một khóa liên tiến trình chỉ cho một export hoặc bokeh preview chạy tại một
+  thời điểm. Giữ trạng thái finishing cho tới khi đóng tiến trình/dọn file xong.
+- Đọc stderr xuống file, đọc tiến độ riêng; không để stderr pipe đầy gây kẹt.
+  Mọi tiến trình do tác vụ khởi động đều được chờ kết thúc hoặc terminate/kill
+  nhóm tiến trình khi lỗi; không dừng tiến trình hay ứng dụng khác của người dùng.
+- Giới hạn 1.5 GiB RSS mỗi tiến trình con và kiểm tra áp lực bộ nhớ qua vm_stat
+  mỗi giây; dừng khi vượt ngưỡng. Đây là cơ chế giảm rủi ro, không phải bảo đảm
+  ngăn được mọi lỗi kernel/driver. Tiến trình con hết phản hồi sẽ bị dừng.
+- Player kết quả cũ được pause/remove src/load trước khi đổi video hoặc xuất
+  tiếp để giải phóng decoder WebKit. Dọn trim/bokeh intermediates của từng lượt;
+  không xóa nguồn và các output đã hoàn tất.
+
+Kiểm chứng: 20 unit tests; MCP/review/render smoke test; hai lượt liên tiếp
+bokeh+nén trên video nhỏ và hai lượt dùng clip 0.8 giây trích từ nguồn 4K thật.
+Bài thử clip 4K dùng CPU ghi nhận peak child RSS ~876.9 MiB; bài thử mã hóa
+phần cứng trên video nhỏ ~197.6 MiB. Các số này không phải tổng RAM/GPU hoặc
+cam kết cho video dài. Không tái hiện cố ý việc treo toàn máy bằng video dài.
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+.venv/bin/python tests/repeated_export_smoke.py
+VIDEO_REPEAT_HARDWARE=1 .venv/bin/python tests/repeated_export_smoke.py
+```
+
+Build bản riêng với tên VideoCompressAutocutSafe và bundle ID
+com.anhdn611.video-compress-autocut.safe, thêm hidden import media_runtime.
+Thoát bản cũ trước khi mở bản Safe Export để không nhầm app đang chạy.

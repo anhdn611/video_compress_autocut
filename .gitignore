@@ -5,3 +5,11 @@ temp/
 *.MOV
 *.gif
 .DS_Store
+
+.venv/
+__pycache__/
+build/
+dist/
+*.spec
+models/*.bin
+models/*.part

@@ -190,6 +190,7 @@ if (btnPreviewBokeh) {
     .then(data => {
       btnPreviewBokeh.innerText = '👁️ Xem trước 1 frame';
       btnPreviewBokeh.disabled = false;
+      if (data.error) { showToast(data.error, '⚠️'); return; }
       if (data.preview_url && bokehPreviewBox && bokehPreviewImg) {
         bokehPreviewImg.src = data.preview_url;
         bokehPreviewBox.style.display = 'block';
@@ -556,6 +557,11 @@ function setTargetMb(mb, updateSlider = true) {
 // Reset
 btnRemoveFile.addEventListener('click', resetToUpload);
 function resetToUpload() {
+  if (currentTask) fetch('/api/selection', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ previous_id: currentTask.id })
+  });
+  document.getElementById('aiStageNotice').hidden = true;
   currentTask = null;
   fileInput.value = '';
   configSection.style.display = 'none';
@@ -564,8 +570,13 @@ function resetToUpload() {
   uploadSection.style.display = 'block';
   setWorkflowStep('upload');
   previewPlayer.pause();
-  previewPlayer.src = '';
+  previewPlayer.removeAttribute('src');
+  previewPlayer.load();
+  reviewPlayer.pause();
+  reviewPlayer.removeAttribute('src');
+  reviewPlayer.load();
   if (progressPollTimer) clearInterval(progressPollTimer);
+  progressPollTimer = null;
 }
 
 // Start Processing
@@ -576,16 +587,20 @@ btnStartProcess.addEventListener('click', () => {
     return;
   }
 
+  previewPlayer.pause();
+  previewPlayer.removeAttribute('src');
+  previewPlayer.load();
   btnStartProcess.disabled = true;
   configSection.style.display = 'none';
   compressProgressPanel.style.display = 'block';
   setWorkflowStep('export');
   compressProgressFill.style.width = '0%';
   compressPercentText.innerText = '0%';
-  compressStageText.innerText = 'Đang khởi động phần cứng Apple Silicon...';
+  compressStageText.innerText = 'Đang chuẩn bị xuất an toàn, mỗi lần một video…';
 
   const payload = {
     id: currentTask.id,
+    hardware_encode: document.getElementById("toggleHardwareEncode").checked,
     mode: isTrimEnabled ? currentTrimMode : 'none',
     enable_bokeh: isBokehEnabled,
     blur_radius: currentBlurRadius,
@@ -627,13 +642,15 @@ btnStartProcess.addEventListener('click', () => {
 
 function startProgressPolling(taskId) {
   if (progressPollTimer) clearInterval(progressPollTimer);
+  progressPollTimer = null;
 
   progressPollTimer = setInterval(() => {
     fetch(`/api/progress?id=${taskId}`)
       .then(res => res.json())
       .then(data => {
+        if (!currentTask || currentTask.id !== taskId) return;
         if (data.error) {
-          clearInterval(progressPollTimer);
+          clearInterval(progressPollTimer); progressPollTimer = null;
           showToast('Lỗi: ' + data.error, '❌');
           resetToUpload();
           return;
@@ -647,10 +664,10 @@ function startProgressPolling(taskId) {
         if (data.speed) compressSpeedText.innerText = data.speed;
 
         if (data.status === 'completed') {
-          clearInterval(progressPollTimer);
+          clearInterval(progressPollTimer); progressPollTimer = null;
           handleProcessCompleted(data);
         } else if (data.status === 'error') {
-          clearInterval(progressPollTimer);
+          clearInterval(progressPollTimer); progressPollTimer = null;
           showToast('Lỗi xử lý video: ' + (data.error || 'Thất bại'), '❌');
           resetToUpload();
         }
@@ -713,3 +730,218 @@ btnSaveDownloads.addEventListener('click', () => {
 });
 
 btnNewTask.addEventListener('click', resetToUpload);
+
+// Observe jobs started by Codex without starting duplicate workers.
+let mcpObserverBusy = false;
+let lastMcpJob = null;
+setInterval(async () => {
+  if (!currentTask || progressPollTimer || mcpObserverBusy) return;
+  mcpObserverBusy = true;
+  const id = currentTask.id;
+  try {
+    const r = await fetch(`/api/progress?id=${id}`);
+    const data = await r.json();
+    if (!currentTask || currentTask.id !== id) return;
+    const notice = document.getElementById('aiStageNotice');
+    notice.textContent = data.ai_stage || '';
+    notice.hidden = !data.ai_stage;
+    if (data.status === 'processing') {
+      previewPlayer.pause();
+      previewPlayer.removeAttribute('src');
+      previewPlayer.load();
+      lastMcpJob = data.mcp_job_id;
+      configSection.style.display = 'none';
+      resultPanel.style.display = 'none';
+      compressProgressPanel.style.display = 'block';
+      setWorkflowStep('export');
+      startProgressPolling(id);
+    } else if (data.status === 'completed' && data.result && data.mcp_job_id &&
+               lastMcpJob !== data.mcp_job_id) {
+      lastMcpJob = data.mcp_job_id;
+      startProgressPolling(id);
+    }
+  } catch (_) { /* The app may be shutting down. */ }
+  finally { mcpObserverBusy = false; }
+}, 1500);
+
+// Provider/model settings: secrets never enter localStorage or GET URLs.
+const aiUI = Object.fromEntries(['aiProfileSelect', 'aiProvider', 'aiProfileName', 'aiBaseUrl', 'aiModelId', 'aiApiKey', 'aiRememberKey', 'aiModelOptions', 'cloudAIStatus', 'btnCloudAI'].map(id => [id, document.getElementById(id)]));
+let aiConfig = { profiles: [], presets: {} };
+let editingAIProfile = null;
+let cloudRunActive = false;
+async function aiRequest(action, data = {}) {
+  const response = await fetch(`/api/ai/${action}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+  const value = await response.json();
+  if (!response.ok) throw new Error(value.error || 'AI gặp lỗi.');
+  return value;
+}
+function showAIConfig(config) {
+  aiConfig = config;
+  aiUI.aiProfileSelect.replaceChildren(new Option('Chọn model AI…', ''));
+  config.profiles.forEach(p => aiUI.aiProfileSelect.add(new Option(`${p.name} · ${p.model}${p.has_key ? '' : ' (cần key)'}`, p.id)));
+  aiUI.aiProfileSelect.value = config.selected_id || '';
+}
+function editAIProfile(id) {
+  const p = aiConfig.profiles.find(p => p.id === id);
+  editingAIProfile = p ? p.id : null;
+  aiUI.aiProfileName.value = p ? p.name : '';
+  aiUI.aiModelId.value = p ? p.model : '';
+  aiUI.aiBaseUrl.value = p ? p.base_url : aiConfig.presets.OpenAI || 'https://api.openai.com/v1';
+  aiUI.aiProvider.value = Object.keys(aiConfig.presets).find(k => aiConfig.presets[k] === aiUI.aiBaseUrl.value) || 'Tùy chỉnh';
+  aiUI.aiApiKey.value = '';
+  aiUI.aiRememberKey.checked = !!(p && p.key_saved);
+  aiUI.aiModelOptions.replaceChildren();
+}
+function aiAction(buttonId, handler) {
+  document.getElementById(buttonId).addEventListener('click', async event => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try { await handler(); } catch (e) { aiUI.cloudAIStatus.textContent = e.message; }
+    finally { button.disabled = false; }
+  });
+}
+aiUI.aiProvider.addEventListener('change', () => {
+  if (aiConfig.presets[aiUI.aiProvider.value]) aiUI.aiBaseUrl.value = aiConfig.presets[aiUI.aiProvider.value];
+  // A different provider is always saved as a new credential scope.
+  editingAIProfile = null;
+  aiUI.aiApiKey.value = '';
+  aiUI.aiModelOptions.replaceChildren();
+});
+aiUI.aiProfileSelect.addEventListener('change', async () => {
+  try {
+    if (aiUI.aiProfileSelect.value) showAIConfig(await aiRequest('select', { id: aiUI.aiProfileSelect.value }));
+    editAIProfile(aiUI.aiProfileSelect.value);
+  } catch (e) { aiUI.cloudAIStatus.textContent = e.message; }
+});
+aiAction('aiNewProfile', async () => { editAIProfile(null); aiUI.cloudAIStatus.textContent = 'Nhập model mới rồi lưu. Cấu hình hiện tại được giữ nguyên.'; });
+aiAction('aiSaveProfile', async () => {
+  const config = await aiRequest('save', { id: editingAIProfile, name: aiUI.aiProfileName.value, model: aiUI.aiModelId.value, base_url: aiUI.aiBaseUrl.value, api_key: aiUI.aiApiKey.value, remember_key: aiUI.aiRememberKey.checked });
+  aiUI.aiApiKey.value = '';
+  showAIConfig(config); editAIProfile(config.selected_id);
+  aiUI.cloudAIStatus.textContent = 'Đã lưu model. Có thể thêm cấu hình khác hoặc bắt đầu tối ưu.';
+});
+aiAction('aiLoadModels', async () => {
+  if (!editingAIProfile && !aiUI.aiApiKey.value) throw new Error('Nhập API key để tải các model hiện có.');
+  aiUI.cloudAIStatus.textContent = 'Đang tải danh sách model từ nhà cung cấp…';
+  const result = await aiRequest('models', { id: editingAIProfile, base_url: aiUI.aiBaseUrl.value, api_key: aiUI.aiApiKey.value });
+  aiUI.aiModelOptions.replaceChildren(...result.models.map(id => new Option(id, id)));
+  aiUI.cloudAIStatus.textContent = `Đã tải ${result.models.length} model. Chọn model hỗ trợ chat trong ô Model ID rồi lưu.`;
+});
+aiAction('aiDeleteProfile', async () => {
+  if (!editingAIProfile) return;
+  const config = await aiRequest('delete', { id: editingAIProfile });
+  showAIConfig(config); editAIProfile(config.selected_id);
+  aiUI.cloudAIStatus.textContent = 'Đã xóa cấu hình và khóa được ghi nhớ.';
+});
+let cloudReviewJob = null;
+let reviewStopAt = null;
+const reviewPlayer = document.getElementById('aiReviewPlayer');
+reviewPlayer.addEventListener('timeupdate', () => {
+  if (reviewStopAt !== null && reviewPlayer.currentTime >= reviewStopAt) {
+    reviewPlayer.pause(); reviewStopAt = null;
+  }
+});
+function playReviewRange(range) {
+  const seek = () => {
+    reviewPlayer.currentTime = Math.max(0, range[0] - .3);
+    reviewStopAt = range[1] + .3;
+    reviewPlayer.play().catch(() => {});
+  };
+  if (reviewPlayer.readyState) seek();
+  else reviewPlayer.addEventListener('loadedmetadata', seek, {once:true});
+}
+function rangeButton(range, label) {
+  const button = document.createElement('button');
+  button.type = 'button'; button.className = 'btn-secondary';
+  button.textContent = `${label} ${range[0].toFixed(2)}–${range[1].toFixed(2)}s`;
+  button.addEventListener('click', () => playReviewRange(range));
+  return button;
+}
+function showCloudReview(jobId, state) {
+  cloudReviewJob = jobId;
+  btnStartProcess.disabled = true;
+  document.getElementById('aiReviewPanel').hidden = false;
+  const summary = state.review ? state.review.summary : '';
+  document.getElementById('aiReviewSummary').textContent = `${state.model} · ${summary} Nguồn: ${(state.source_duration || 0).toFixed(1)}s. Bản nháp sau lọc khoảng lặng: ${(state.draft_duration || 0).toFixed(1)}s.`;
+  const rows = document.getElementById('aiReviewRows'); rows.replaceChildren();
+  if (!state.review_rows.length) {
+    const p = document.createElement('p'); p.textContent = 'Không có câu được AI đề xuất bỏ. Nếu duyệt, chỉ áp dụng phần cắt khoảng lặng sơ bộ.'; rows.append(p);
+  }
+  state.review_rows.forEach(row => {
+    const card = document.createElement('div'); card.className = 'ai-review-card';
+    const label = document.createElement('label');
+    const check = document.createElement('input'); check.type = 'checkbox'; check.checked = true; check.dataset.decisionIndex = row.index;
+    label.append(check, document.createTextNode(` Bỏ: ${row.removed_text}`)); card.append(label);
+    if (row.replacement_text) { const kept = document.createElement('p'); kept.textContent = 'Giữ thay thế: ' + row.replacement_text; card.append(kept); }
+    const reason = document.createElement('p'); reason.className = 'ai-settings-note'; reason.textContent = row.reason; card.append(reason);
+    const buttons = document.createElement('div'); buttons.className = 'ai-settings-actions';
+    row.source_ranges.forEach(range => buttons.append(rangeButton(range, 'Nghe/xem đoạn'))); card.append(buttons); rows.append(card);
+  });
+  const silenceRows = document.getElementById('aiSilenceReview'); silenceRows.replaceChildren();
+  (state.preliminary_cuts || []).forEach(range => silenceRows.append(rangeButton(range, 'Khoảng lặng')));
+  if (!state.preliminary_cuts || !state.preliminary_cuts.length) silenceRows.textContent = 'Không có khoảng lặng được đề xuất cắt.';
+  reviewPlayer.src = `/api/review-source?job_id=${encodeURIComponent(jobId)}`;
+  aiUI.btnCloudAI.disabled = true;
+}
+function hideCloudReview() {
+  cloudReviewJob = null;
+  btnStartProcess.disabled = false;
+  document.getElementById('aiReviewPanel').hidden = true;
+  reviewPlayer.pause(); reviewPlayer.removeAttribute('src'); reviewPlayer.load();
+}
+async function pollCloudJob(jobId, videoId) {
+  while (true) {
+    const state = await aiRequest('job', {job_id:jobId});
+    aiUI.cloudAIStatus.textContent = state.stage || 'Đang xử lý AI…';
+    if (state.status === 'awaiting_review') { showCloudReview(jobId, state); return; }
+    if (state.status === 'error') throw new Error(state.error || 'AI chưa hoàn tất.');
+    if (state.status === 'cancelled') { hideCloudReview(); return; }
+    if (state.status === 'completed') {
+      aiUI.cloudAIStatus.textContent = `Đã xuất với ${state.model}.`;
+      if (currentTask && currentTask.id === videoId) startProgressPolling(videoId);
+      return;
+    }
+    await new Promise(resolve => setTimeout(resolve, 1200));
+  }
+}
+aiUI.btnCloudAI.addEventListener('click', async () => {
+  if (cloudRunActive || cloudReviewJob) return;
+  if (!currentTask) { showToast('Chọn video trước khi chạy AI.', '⚠️'); return; }
+  if (!aiUI.aiProfileSelect.value) { document.getElementById('aiSettings').open = true; aiUI.cloudAIStatus.textContent = 'Thêm và chọn model AI trước.'; return; }
+  cloudRunActive = true; aiUI.btnCloudAI.disabled = true;
+  const videoId = currentTask.id;
+  try {
+    const job = await aiRequest('start', { profile_id: aiUI.aiProfileSelect.value, request_id: crypto.randomUUID(), target_mb: targetMb, then_compress: isCompressEnabled, hardware_encode: document.getElementById("toggleHardwareEncode").checked });
+    await pollCloudJob(job.job_id, videoId);
+  } catch (e) { aiUI.cloudAIStatus.textContent = e.message; }
+  finally { cloudRunActive = false; aiUI.btnCloudAI.disabled = !!cloudReviewJob; }
+});
+aiAction('aiApproveReview', async () => {
+  if (!cloudReviewJob) return;
+  const id = cloudReviewJob;
+  const indexes = Array.from(document.querySelectorAll('#aiReviewRows input:checked')).map(input => Number(input.dataset.decisionIndex));
+  await aiRequest('approve', {job_id:id, decision_indexes:indexes, hardware_encode:document.getElementById('toggleHardwareEncode').checked});
+  hideCloudReview(); btnStartProcess.disabled = true; cloudRunActive = true; aiUI.btnCloudAI.disabled = true;
+  try { await pollCloudJob(id, currentTask && currentTask.id); }
+  finally { cloudRunActive = false; aiUI.btnCloudAI.disabled = !!cloudReviewJob; }
+});
+aiAction('aiCancelReview', async () => {
+  if (!cloudReviewJob) return;
+  await aiRequest('cancel', {job_id:cloudReviewJob});
+  hideCloudReview(); aiUI.btnCloudAI.disabled = false;
+  aiUI.cloudAIStatus.textContent = 'Đã hủy đề xuất. Chưa xuất hay ghép video.';
+});
+aiRequest('settings').then(async config => {
+  showAIConfig(config); editAIProfile(config.selected_id);
+  if (config.selected_video && config.selected_video.video_id && !currentTask) {
+    const v = config.selected_video;
+    currentTask = {id:v.video_id, filename:v.filename, info:v.info, thumbnail_url:`/api/thumbnail?id=${v.video_id}`};
+    displayVideoInfo(currentTask);
+  }
+  const active = config.active_jobs && config.active_jobs[0];
+  if (active) {
+    cloudRunActive = true; aiUI.btnCloudAI.disabled = true;
+    try { await pollCloudJob(active.job_id, currentTask && currentTask.id); }
+    finally { cloudRunActive = false; aiUI.btnCloudAI.disabled = !!cloudReviewJob; }
+  }
+}).catch(e => { aiUI.cloudAIStatus.textContent = e.message; });

@@ -26,8 +26,54 @@
       <span class="workflow-step" data-workflow-step="export"><i>3</i> Xuất file</span>
     </nav>
 
+    <section class="cloud-ai-panel" aria-label="AI chỉnh sửa">
+      <div class="cloud-ai-toolbar">
+        <div><strong>AI chỉnh sửa</strong><p>Chỉ gửi transcript và mốc lời nói. Video và âm thanh ở trên máy.</p></div>
+        <select id="aiProfileSelect" aria-label="Model AI đã lưu"><option value="">Chưa có model</option></select>
+        <button type="button" class="btn-primary" id="btnCloudAI">✨ Phân tích và đề xuất</button>
+      </div>
+      <details id="aiSettings"><summary>Cài đặt nhà cung cấp và model</summary>
+        <div class="ai-settings-grid">
+          <label>Nhà cung cấp<select id="aiProvider"><option>OpenAI</option><option>Gemini</option><option>DeepSeek</option><option>OpenRouter</option><option>Tùy chỉnh</option></select></label>
+          <label>Tên cấu hình<input id="aiProfileName" placeholder="Ví dụ: Model biên tập tiếng Việt" maxlength="100"></label>
+          <label>API base URL<input id="aiBaseUrl" type="url" value="https://api.openai.com/v1" autocomplete="off"></label>
+          <label>Model ID<input id="aiModelId" list="aiModelOptions" placeholder="Nhập ID hoặc tải danh sách model" maxlength="200"><datalist id="aiModelOptions"></datalist></label>
+          <label>API key<input id="aiApiKey" type="password" autocomplete="off" placeholder="Khóa mới; để trống để giữ khóa đã lưu"></label>
+          <label class="ai-remember"><input id="aiRememberKey" type="checkbox"> Ghi nhớ khóa trong macOS Keychain</label>
+        </div>
+        <p class="ai-settings-note">Nếu không ghi nhớ, khóa chỉ dùng trong phiên ứng dụng này. Mỗi cấu hình là một model; có thể lưu nhiều cấu hình cùng nhà cung cấp. API có thể tính phí theo tài khoản của bạn.</p>
+        <div class="ai-settings-actions">
+          <button type="button" class="btn-secondary" id="aiNewProfile">Thêm model</button>
+          <button type="button" class="btn-secondary" id="aiSaveProfile">Lưu cấu hình</button>
+          <button type="button" class="btn-secondary" id="aiLoadModels">Tải danh sách model</button>
+          <button type="button" class="btn-secondary" id="aiDeleteProfile">Xóa cấu hình</button>
+        </div>
+      </details>
+      <p id="cloudAIStatus" role="status" class="ai-settings-note"></p>
+      <section id="aiReviewPanel" hidden aria-label="Duyệt đề xuất AI">
+        <h3>Duyệt trước khi xuất</h3>
+        <p id="aiReviewSummary" class="ai-settings-note"></p>
+        <p class="ai-settings-note">Bỏ chọn những câu bạn muốn giữ. Chưa có video nào được xuất từ đề xuất này.</p>
+        <div id="aiReviewRows"></div>
+        <details><summary>Khoảng lặng đề xuất cắt sơ bộ</summary><div id="aiSilenceReview"></div></details>
+        <p class="ai-settings-note">Xem/nghe bản nguồn tại từng mốc. Đây là nguồn hiện tại, chưa áp dụng chỉnh sửa AI.</p>
+        <video id="aiReviewPlayer" controls preload="metadata" style="width:100%;max-height:300px;background:#08090d;border-radius:10px"></video>
+        <div class="ai-settings-actions">
+          <button type="button" class="btn-primary" id="aiApproveReview">Duyệt và xuất</button>
+          <button type="button" class="btn-secondary" id="aiCancelReview">Hủy đề xuất</button>
+        </div>
+      </section>
+    </section>
+
+    <aside class="cloud-ai-panel" style="padding:14px 20px">
+      <strong>Bản xuất an toàn</strong>
+      <p class="ai-settings-note">Giải mã CPU, mỗi lần một video. Xóa phông dùng GPU làm mờ và có cạnh dài tối đa 1920 px.</p>
+      <label><input type="checkbox" id="toggleHardwareEncode"> Bật tăng tốc mã hóa phần cứng (nhanh hơn)</label>
+    </aside>
+
     <!-- Main Workspace -->
     <main class="glass-panel" id="mainWorkspace">
+      <p id="aiStageNotice" role="status" hidden style="margin:0 0 16px;color:var(--text-muted);font-size:.9rem"></p>
       
       <!-- Upload Dropzone -->
       <section id="uploadSection">
@@ -77,6 +123,8 @@
             </button>
           </div>
         </div>
+
+        <p style="color:var(--text-muted);font-size:.85rem;margin:0 0 18px">Chọn model → Phân tích và đề xuất → Duyệt từng đoạn → Duyệt và xuất.</p>
 
         <!-- BỘ XỬ LÝ ĐA NĂNG (STUDIO PIPELINE) -->
         <div class="studio-header-bar">
